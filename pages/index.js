@@ -28,10 +28,10 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(false);
   const [lastUpdate, setLastUpdate] = useState(null);
   const [accumulated, setAccumulated] = useState({ importKwh:0, exportKwh:0, selfKwh:0 });
+  const [rawDebug, setRawDebug] = useState(null);
   const intervalRef = useRef(null);
   const lastPollRef = useRef(null);
 
-  // Login via proxy (servidor) para evitar CORS en CrossLogin
   const handleLogin = async () => {
     setLoading(true); setError('');
     try {
@@ -48,7 +48,6 @@ export default function Dashboard() {
     finally { setLoading(false); }
   };
 
-  // Monitor DIRECTAMENTE desde el browser (IP residencial, no AWS)
   const fetchMonitor = useCallback(async () => {
     if (!token) return;
     try {
@@ -64,14 +63,17 @@ export default function Dashboard() {
       try { result = JSON.parse(raw); }
       catch(e) { throw new Error('Respuesta no JSON: ' + raw.substring(0, 100)); }
 
-      if (result.code !== 0) {
+      // SEMS devuelve code como string O número — parseInt para comparar
+      if (parseInt(result.code) !== 0) {
         throw new Error(`Error ${result.code}: ${result.msg}`);
       }
 
       const d = result.data;
+      setRawDebug(d); // Guardar para diagnóstico
       console.log('Monitor data keys:', Object.keys(d || {}));
+      console.log('Monitor data:', JSON.stringify(d).substring(0, 800));
 
-      // Extraer flujos de todas las estructuras posibles
+      // Extraer flujos de todas las estructuras posibles de SEMS
       const flow = d?.powerflow || d?.inverter?.[0]?.d || d?.solarList?.[0]?.d || d;
       const inv  = d?.inverter?.[0] || d?.solarList?.[0] || {};
 
@@ -81,28 +83,25 @@ export default function Dashboard() {
       const pbat  = parseFloat(flow?.pbat  ?? inv?.pbat  ?? d?.pbat  ?? 0);
       const soc   = parseFloat(d?.soc ?? inv?.soc ?? flow?.soc ?? 0);
 
-      // Si todos son 0, mostrar debug
-      if (ppv === 0 && pload === 0 && soc === 0) {
-        console.log('All zeros - raw data:', JSON.stringify(d).substring(0, 500));
-        setMonitorError({ msg: 'Datos en cero - ver debug', debug: d });
-      } else {
-        setData({ ppv, pload, pgrid, pbat, soc });
-      }
+      // Mostrar datos aunque sean 0 (noche, sin sol, etc.)
+      setData({ ppv, pload, pgrid, pbat, soc });
 
       const now = Date.now();
-      if (lastPollRef.current && (ppv > 0 || pload > 0)) {
+      if (lastPollRef.current) {
         const dtH = (now - lastPollRef.current) / 3600000;
-        setAccumulated(prev => ({
-          importKwh: prev.importKwh + (pgrid > 0 ? pgrid*dtH/1000 : 0),
-          exportKwh: prev.exportKwh + (pgrid < 0 ? Math.abs(pgrid)*dtH/1000 : 0),
-          selfKwh:   prev.selfKwh   + (Math.max(0, ppv - Math.max(0, -pgrid))*dtH/1000),
-        }));
+        if (ppv > 0 || pgrid !== 0) {
+          setAccumulated(prev => ({
+            importKwh: prev.importKwh + (pgrid > 0 ? pgrid*dtH/1000 : 0),
+            exportKwh: prev.exportKwh + (pgrid < 0 ? Math.abs(pgrid)*dtH/1000 : 0),
+            selfKwh:   prev.selfKwh   + (Math.max(0, ppv - Math.max(0, -pgrid))*dtH/1000),
+          }));
+        }
       }
       lastPollRef.current = now;
       setLastUpdate(new Date());
     } catch(e) {
       console.error('Monitor error:', e);
-      setMonitorError({ msg: e.message });
+      setMonitorError(e.message);
     }
   }, [token]);
 
@@ -156,13 +155,8 @@ export default function Dashboard() {
 
             {monitorError && (
               <div style={{margin:'14px',background:'#1a0808',border:'1px solid #f87171',borderRadius:10,padding:12}}>
-                <div style={{color:'#f87171',fontSize:12,marginBottom:6,fontFamily:'Space Mono'}}>ERROR:</div>
-                <div style={{color:'#f87171',fontSize:13}}>{monitorError.msg}</div>
-                {monitorError.debug && (
-                  <pre style={{fontSize:9,color:'#f87171',opacity:0.6,marginTop:8,whiteSpace:'pre-wrap',wordBreak:'break-all'}}>
-                    {JSON.stringify(monitorError.debug, null, 2)?.substring(0,1500)}
-                  </pre>
-                )}
+                <div style={{color:'#f87171',fontSize:12,fontFamily:'Space Mono',marginBottom:4}}>ERROR:</div>
+                <div style={{color:'#f87171',fontSize:13}}>{monitorError}</div>
               </div>
             )}
 
@@ -179,7 +173,7 @@ export default function Dashboard() {
                       <span className="card-icon">☀️</span>
                       <div className="card-value solar-val">{formatW(data.ppv)}</div>
                       <div className="card-label">Solar</div>
-                      <div className="card-sub">{data.ppv > 0 ? 'Generando' : 'Sin generación'}</div>
+                      <div className="card-sub">{data.ppv > 0 ? 'Generando' : 'Sin sol'}</div>
                     </div>
                     <div className="card">
                       <span className="card-icon">🏠</span>
@@ -225,6 +219,18 @@ export default function Dashboard() {
                     <div className="kwh-item"><div className="kwh-val import-val">{accumulated.importKwh.toFixed(3)}</div><div className="kwh-lbl">Importado</div></div>
                   </div>
                 </section>
+
+                {/* Debug colapsado */}
+                {rawDebug && (
+                  <div style={{padding:'16px 16px 0'}}>
+                    <details>
+                      <summary style={{fontSize:9,color:'#333',fontFamily:'Space Mono',cursor:'pointer'}}>Ver datos brutos API</summary>
+                      <pre style={{background:'#0a0a12',border:'1px solid #1a1a2e',borderRadius:8,padding:10,fontSize:9,color:'#444',overflowX:'auto',whiteSpace:'pre-wrap',wordBreak:'break-all',marginTop:6}}>
+                        {JSON.stringify(rawDebug, null, 2)?.substring(0, 3000)}
+                      </pre>
+                    </details>
+                  </div>
+                )}
               </>
             )}
           </div>
