@@ -8,12 +8,11 @@ const STATION_ID = '8445d981-4fbe-414b-9d12-60bac0b7eeb1';
 
 function getTarifaImportacion() {
   const h = new Date().getHours();
-  return (h >= 8) ? TARIFA_IMPORTACION_PUNTA : TARIFA_IMPORTACION_VALLE;
+  return h >= 8 ? TARIFA_IMPORTACION_PUNTA : TARIFA_IMPORTACION_VALLE;
 }
-
 function formatW(w) {
-  if (w === null || w === undefined) return '—';
-  if (Math.abs(w) >= 1000) return `${(w / 1000).toFixed(2)} kW`;
+  if (w == null) return '—';
+  if (Math.abs(w) >= 1000) return `${(w/1000).toFixed(2)} kW`;
   return `${Math.round(w)} W`;
 }
 
@@ -27,8 +26,7 @@ export default function Dashboard() {
   const [monitorError, setMonitorError] = useState(null);
   const [loading, setLoading] = useState(false);
   const [lastUpdate, setLastUpdate] = useState(null);
-  const [accumulated, setAccumulated] = useState({ importKwh: 0, exportKwh: 0, selfKwh: 0 });
-  const [rawDebug, setRawDebug] = useState(null);
+  const [accumulated, setAccumulated] = useState({ importKwh:0, exportKwh:0, selfKwh:0 });
   const intervalRef = useRef(null);
   const lastPollRef = useRef(null);
 
@@ -39,23 +37,18 @@ export default function Dashboard() {
       body: JSON.stringify(body),
     });
     const json = await r.json();
-    if (!r.ok) throw new Error(json.error || JSON.stringify(json).substring(0, 300));
+    if (!r.ok) throw Object.assign(new Error(json.error || 'API error'), { detail: json });
     return json;
   };
 
   const handleLogin = async () => {
-    setLoading(true);
-    setError('');
+    setLoading(true); setError('');
     try {
       const tokenData = await api('login', { account, pwd });
-      console.log('Token keys:', Object.keys(tokenData));
       setToken(tokenData);
       setStep('dashboard');
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
+    } catch(e) { setError(e.message); }
+    finally { setLoading(false); }
   };
 
   const fetchMonitor = useCallback(async () => {
@@ -63,38 +56,27 @@ export default function Dashboard() {
     try {
       setMonitorError(null);
       const result = await api('monitor', { token, powerStationId: STATION_ID });
-      console.log('Monitor result:', JSON.stringify(result).substring(0, 600));
-      setRawDebug(result);
-
       const d = result?.powerflow || result?.inverter?.[0]?.d || result?.solarList?.[0]?.d || result;
       const inv = result?.inverter?.[0] || result?.solarList?.[0] || {};
-
       const ppv   = parseFloat(d?.ppv   ?? inv?.ppv   ?? result?.ppv   ?? 0);
       const pload = parseFloat(d?.pload ?? inv?.pload ?? result?.pload ?? 0);
       const pgrid = parseFloat(d?.pgrid ?? inv?.pgrid ?? result?.pgrid ?? 0);
       const pbat  = parseFloat(d?.pbat  ?? inv?.pbat  ?? result?.pbat  ?? 0);
-      const soc   = parseFloat(result?.soc ?? inv?.soc ?? d?.soc ?? result?.battery_soc ?? 0);
-
-      // Solo mostrar datos si al menos ppv o pload tienen valor
-      if (ppv > 0 || pload > 0 || soc > 0) {
-        setData({ ppv, pload, pgrid, pbat, soc });
-      }
-
+      const soc   = parseFloat(result?.soc ?? inv?.soc ?? d?.soc ?? 0);
+      if (ppv > 0 || pload > 0 || soc > 0) setData({ ppv, pload, pgrid, pbat, soc });
       const now = Date.now();
-      const last = lastPollRef.current;
-      if (last && (ppv > 0 || pload > 0)) {
-        const dtH = (now - last) / 3600000;
+      if (lastPollRef.current) {
+        const dtH = (now - lastPollRef.current) / 3600000;
         setAccumulated(prev => ({
-          importKwh: prev.importKwh + (pgrid > 0 ? pgrid * dtH / 1000 : 0),
-          exportKwh: prev.exportKwh + (pgrid < 0 ? Math.abs(pgrid) * dtH / 1000 : 0),
-          selfKwh:   prev.selfKwh   + (Math.max(0, ppv - Math.max(0, -pgrid)) * dtH / 1000),
+          importKwh: prev.importKwh + (pgrid > 0 ? pgrid*dtH/1000 : 0),
+          exportKwh: prev.exportKwh + (pgrid < 0 ? Math.abs(pgrid)*dtH/1000 : 0),
+          selfKwh:   prev.selfKwh   + (Math.max(0, ppv - Math.max(0, -pgrid))*dtH/1000),
         }));
       }
       lastPollRef.current = now;
       setLastUpdate(new Date());
-    } catch (e) {
-      console.error('Monitor error:', e);
-      setMonitorError(e.message);
+    } catch(e) {
+      setMonitorError({ msg: e.message, detail: e.detail });
     }
   }, [token]);
 
@@ -107,12 +89,11 @@ export default function Dashboard() {
   }, [step, fetchMonitor]);
 
   const balance = data ? (() => {
-    const tarifa = getTarifaImportacion();
-    const ingresoExportacion = accumulated.exportKwh * TARIFA_EXPORTACION;
-    const ahorroAutoconsumo  = accumulated.selfKwh   * tarifa;
-    const gastoImportacion   = accumulated.importKwh * tarifa;
-    return { ingresoExportacion, ahorroAutoconsumo, gastoImportacion,
-      neto: ingresoExportacion + ahorroAutoconsumo - gastoImportacion };
+    const t = getTarifaImportacion();
+    const ie = accumulated.exportKwh * TARIFA_EXPORTACION;
+    const aa = accumulated.selfKwh * t;
+    const gi = accumulated.importKwh * t;
+    return { ie, aa, gi, neto: ie+aa-gi };
   })() : null;
 
   return (
@@ -126,11 +107,11 @@ export default function Dashboard() {
 
         {step === 'login' && (
           <div className="login-wrap">
-            <div className="login-logo">☀️</div>
+            <div style={{fontSize:52}}>☀️</div>
             <h1 className="login-title">GoodWe<br /><span>Dashboard</span></h1>
-            <p className="login-sub">Accede con tu cuenta SEMS+</p>
-            <input className="input" type="email" placeholder="Email" value={account} onChange={e => setAccount(e.target.value)} />
-            <input className="input" type="password" placeholder="Contraseña" value={pwd} onChange={e => setPwd(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleLogin()} />
+            <p style={{color:'#888',fontSize:13}}>Accede con tu cuenta SEMS+</p>
+            <input className="input" type="email" placeholder="Email" value={account} onChange={e=>setAccount(e.target.value)} />
+            <input className="input" type="password" placeholder="Contraseña" value={pwd} onChange={e=>setPwd(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleLogin()} />
             {error && <div className="error">{error}</div>}
             <button className="btn-primary" onClick={handleLogin} disabled={loading}>
               {loading ? 'Conectando...' : 'Entrar'}
@@ -142,31 +123,45 @@ export default function Dashboard() {
           <div className="dashboard">
             <header className="dash-header">
               <div className="dash-title">Solar Live</div>
-              <div className="dash-update">
+              <div style={{fontFamily:'Space Mono',fontSize:11,color:'#555'}}>
                 {lastUpdate ? `⟳ ${lastUpdate.toLocaleTimeString('es-ES')}` : 'Cargando...'}
               </div>
             </header>
 
-            {/* Error de monitor */}
-            {monitorError && (
-              <div style={{margin:'16px',background:'#1a0a0a',border:'1px solid #f87171',borderRadius:10,padding:12}}>
-                <div style={{color:'#f87171',fontSize:12,marginBottom:8,fontFamily:'Space Mono'}}>ERROR MONITOR:</div>
-                <div style={{color:'#f87171',fontSize:11,wordBreak:'break-all'}}>{monitorError}</div>
-              </div>
-            )}
-
-            {/* Debug: respuesta cruda si no hay datos */}
-            {!data && rawDebug && (
-              <div style={{padding:'0 16px'}}>
-                <div style={{fontSize:9,color:'#444',fontFamily:'Space Mono',marginBottom:8,marginTop:16}}>RESPUESTA API (DIAGNÓSTICO):</div>
-                <pre style={{background:'#0f0f1a',border:'1px solid #2a2a3f',borderRadius:8,padding:12,fontSize:10,color:'#aaa',overflowX:'auto',whiteSpace:'pre-wrap',wordBreak:'break-all'}}>
-                  {JSON.stringify(rawDebug, null, 2)?.substring(0, 2000)}
+            {/* DEBUG TOKEN - visible para diagnóstico */}
+            {token && !data && (
+              <div style={{margin:'14px 14px 0',background:'#0a0a14',border:'1px solid #2a2a3f',borderRadius:10,padding:12}}>
+                <div style={{fontSize:9,color:'#555',fontFamily:'Space Mono',marginBottom:6}}>TOKEN RECIBIDO DEL LOGIN:</div>
+                <pre style={{fontSize:10,color:'#7af',whiteSpace:'pre-wrap',wordBreak:'break-all'}}>
+                  {JSON.stringify({
+                    keys: Object.keys(token),
+                    uid: token.uid ? token.uid.substring(0,8)+'...' : 'N/A',
+                    hasToken: !!token.token,
+                    hasTimestamp: !!token.timestamp,
+                    api_domain: token.api_domain || 'N/A',
+                    version: token.version || 'N/A',
+                    client: token.client || 'N/A',
+                    language: token.language || 'N/A',
+                  }, null, 2)}
                 </pre>
               </div>
             )}
 
-            {!data && !rawDebug && !monitorError && (
-              <div className="loading-msg">Obteniendo datos...</div>
+            {/* Error monitor con detalle */}
+            {monitorError && (
+              <div style={{margin:'14px 14px 0',background:'#1a0808',border:'1px solid #f87171',borderRadius:10,padding:12}}>
+                <div style={{color:'#f87171',fontSize:11,fontFamily:'Space Mono',marginBottom:6}}>ERROR MONITOR:</div>
+                <div style={{color:'#f87171',fontSize:12,marginBottom:8}}>{monitorError.msg}</div>
+                {monitorError.detail && (
+                  <pre style={{fontSize:9,color:'#f87171',opacity:0.7,whiteSpace:'pre-wrap',wordBreak:'break-all'}}>
+                    {JSON.stringify(monitorError.detail, null, 2)}
+                  </pre>
+                )}
+              </div>
+            )}
+
+            {!data && !monitorError && (
+              <div style={{textAlign:'center',padding:'40px 20px',color:'#555',fontFamily:'Space Mono',fontSize:13}}>Obteniendo datos...</div>
             )}
 
             {data && (
@@ -178,27 +173,21 @@ export default function Dashboard() {
                       <span className="card-icon">☀️</span>
                       <div className="card-value solar-val">{formatW(data.ppv)}</div>
                       <div className="card-label">Solar</div>
-                      <div className="card-sub">Generando</div>
                     </div>
                     <div className="card">
                       <span className="card-icon">🏠</span>
                       <div className="card-value load-val">{formatW(data.pload)}</div>
                       <div className="card-label">Carga</div>
-                      <div className="card-sub">Consumo casa</div>
                     </div>
                     <div className="card">
-                      <span className="card-icon">{data.pgrid > 0 ? '⬇️' : data.pgrid < 0 ? '⬆️' : '↔️'}</span>
-                      <div className={`card-value ${data.pgrid > 0 ? 'import-val' : data.pgrid < 0 ? 'export-val' : ''}`}>
-                        {formatW(Math.abs(data.pgrid))}
-                      </div>
-                      <div className="card-label">Red</div>
-                      <div className="card-sub">{data.pgrid > 0 ? 'Importando' : data.pgrid < 0 ? 'Exportando' : 'Sin flujo'}</div>
+                      <span className="card-icon">{data.pgrid>0?'⬇️':data.pgrid<0?'⬆️':'↔️'}</span>
+                      <div className={`card-value ${data.pgrid>0?'import-val':data.pgrid<0?'export-val':''}`}>{formatW(Math.abs(data.pgrid))}</div>
+                      <div className="card-label">{data.pgrid>0?'Importando':data.pgrid<0?'Exportando':'Red'}</div>
                     </div>
                     <div className="card">
                       <span className="card-icon">🔋</span>
                       <div className="card-value bat-val">{data.soc}%</div>
                       <div className="card-label">Batería</div>
-                      <div className="card-sub">{formatW(Math.abs(data.pbat))} · {data.pbat > 0 ? 'Cargando' : data.pbat < 0 ? 'Descargando' : 'Reposo'}</div>
                     </div>
                   </div>
                 </section>
@@ -207,25 +196,11 @@ export default function Dashboard() {
                   <section className="section">
                     <div className="section-label">BALANCE ECONÓMICO (SESIÓN)</div>
                     <div className="balance-card">
-                      <div className="balance-row">
-                        <span className="balance-label">💰 Ingresos exportación</span>
-                        <span className="balance-value pos">+{balance.ingresoExportacion.toFixed(4)} €</span>
-                      </div>
-                      <div className="balance-row">
-                        <span className="balance-label">⚡ Ahorro autoconsumo</span>
-                        <span className="balance-value pos">+{balance.ahorroAutoconsumo.toFixed(4)} €</span>
-                      </div>
-                      <div className="balance-row">
-                        <span className="balance-label">🔌 Gasto importación</span>
-                        <span className="balance-value neg">-{balance.gastoImportacion.toFixed(4)} €</span>
-                      </div>
+                      <div className="balance-row"><span className="balance-label">💰 Exportación</span><span className="balance-value pos">+{balance.ie.toFixed(4)} €</span></div>
+                      <div className="balance-row"><span className="balance-label">⚡ Autoconsumo</span><span className="balance-value pos">+{balance.aa.toFixed(4)} €</span></div>
+                      <div className="balance-row"><span className="balance-label">🔌 Importación</span><span className="balance-value neg">-{balance.gi.toFixed(4)} €</span></div>
                       <div className="balance-divider" />
-                      <div className="balance-neto">
-                        <span>BALANCE NETO</span>
-                        <span className={balance.neto >= 0 ? 'pos' : 'neg'}>
-                          {balance.neto >= 0 ? '+' : ''}{balance.neto.toFixed(4)} €
-                        </span>
-                      </div>
+                      <div className="balance-neto"><span>BALANCE NETO</span><span className={balance.neto>=0?'pos':'neg'}>{balance.neto>=0?'+':''}{balance.neto.toFixed(4)} €</span></div>
                     </div>
                   </section>
                 )}
@@ -238,19 +213,6 @@ export default function Dashboard() {
                     <div className="kwh-item"><div className="kwh-val import-val">{accumulated.importKwh.toFixed(3)}</div><div className="kwh-lbl">Importado</div></div>
                   </div>
                 </section>
-
-                {/* Debug raw siempre visible al fondo */}
-                {rawDebug && (
-                  <div style={{padding:'18px 16px 0'}}>
-                    <div style={{fontSize:9,color:'#222',fontFamily:'Space Mono',marginBottom:6}}>RAW API (tap para expandir)</div>
-                    <details>
-                      <summary style={{fontSize:10,color:'#333',fontFamily:'Space Mono',cursor:'pointer'}}>Ver respuesta</summary>
-                      <pre style={{background:'#0a0a12',border:'1px solid #1e1e30',borderRadius:8,padding:10,fontSize:9,color:'#555',overflowX:'auto',whiteSpace:'pre-wrap',wordBreak:'break-all',marginTop:8}}>
-                        {JSON.stringify(rawDebug, null, 2)?.substring(0, 3000)}
-                      </pre>
-                    </details>
-                  </div>
-                )}
               </>
             )}
           </div>
@@ -258,49 +220,39 @@ export default function Dashboard() {
       </div>
 
       <style jsx global>{`
-        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-        body { background: #0a0a0f; color: #e8e8f0; font-family: 'Syne', sans-serif; -webkit-font-smoothing: antialiased; }
-        .app { min-height: 100vh; max-width: 480px; margin: 0 auto; padding: 0 0 40px; }
-        .login-wrap { display: flex; flex-direction: column; align-items: center; padding: 60px 24px 40px; gap: 16px; }
-        .login-logo { font-size: 56px; }
-        .login-title { font-size: 32px; font-weight: 800; text-align: center; line-height: 1.1; }
-        .login-title span { color: #f59e0b; }
-        .login-sub { color: #888; font-size: 14px; }
-        .input { width: 100%; background: #13131f; border: 1.5px solid #2a2a3f; border-radius: 12px; padding: 14px 16px; color: #e8e8f0; font-size: 16px; font-family: inherit; outline: none; }
-        .input:focus { border-color: #f59e0b; }
-        .btn-primary { width: 100%; background: #f59e0b; color: #0a0a0f; border: none; border-radius: 12px; padding: 16px; font-size: 16px; font-weight: 700; font-family: inherit; cursor: pointer; }
-        .btn-primary:disabled { opacity: .5; }
-        .error { background: #2a0a0a; border: 1px solid #f87171; border-radius: 8px; padding: 10px 14px; color: #f87171; font-size: 12px; width: 100%; word-break: break-all; }
-        .dash-header { display: flex; justify-content: space-between; align-items: center; padding: 20px 20px 8px; border-bottom: 1px solid #1a1a2e; }
-        .dash-title { font-size: 20px; font-weight: 800; }
-        .dash-update { font-family: 'Space Mono', monospace; font-size: 11px; color: #555; }
-        .loading-msg { text-align: center; padding: 40px 20px; color: #555; font-family: 'Space Mono', monospace; font-size: 13px; }
-        .section { padding: 20px 16px 0; }
-        .section-label { font-family: 'Space Mono', monospace; font-size: 10px; letter-spacing: 2px; color: #444; margin-bottom: 12px; }
-        .cards-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-        .card { background: #0f0f1a; border: 1px solid #1e1e30; border-radius: 16px; padding: 16px; }
-        .card-icon { font-size: 20px; display: block; margin-bottom: 8px; }
-        .card-value { font-family: 'Space Mono', monospace; font-size: 18px; font-weight: 700; }
-        .solar-val { color: #fbbf24; }
-        .load-val { color: #a5b4fc; }
-        .import-val { color: #f87171; }
-        .export-val { color: #34d399; }
-        .bat-val { color: #34d399; }
-        .card-label { font-size: 13px; font-weight: 700; margin-top: 4px; }
-        .card-sub { font-size: 11px; color: #555; margin-top: 3px; font-family: 'Space Mono', monospace; }
-        .balance-card { background: #0f0f1a; border: 1px solid #1e1e30; border-radius: 16px; padding: 18px; }
-        .balance-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #1a1a2a; font-size: 13px; }
-        .balance-label { color: #aaa; }
-        .balance-value { font-family: 'Space Mono', monospace; font-size: 13px; font-weight: 700; }
-        .pos { color: #34d399; }
-        .neg { color: #f87171; }
-        .balance-divider { height: 1px; background: #2a2a3f; margin: 8px 0; }
-        .balance-neto { display: flex; justify-content: space-between; align-items: center; padding-top: 8px; font-weight: 700; font-size: 14px; }
-        .balance-neto .pos, .balance-neto .neg { font-family: 'Space Mono', monospace; font-size: 16px; }
-        .kwh-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
-        .kwh-item { background: #0f0f1a; border: 1px solid #1e1e30; border-radius: 12px; padding: 14px 10px; text-align: center; }
-        .kwh-val { font-family: 'Space Mono', monospace; font-size: 14px; font-weight: 700; }
-        .kwh-lbl { font-size: 10px; color: #555; margin-top: 4px; }
+        *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+        body{background:#0a0a0f;color:#e8e8f0;font-family:'Syne',sans-serif;-webkit-font-smoothing:antialiased}
+        .app{min-height:100vh;max-width:480px;margin:0 auto;padding:0 0 40px}
+        .login-wrap{display:flex;flex-direction:column;align-items:center;padding:60px 24px 40px;gap:16px}
+        .login-title{font-size:32px;font-weight:800;text-align:center;line-height:1.1}
+        .login-title span{color:#f59e0b}
+        .input{width:100%;background:#13131f;border:1.5px solid #2a2a3f;border-radius:12px;padding:14px 16px;color:#e8e8f0;font-size:16px;font-family:inherit;outline:none}
+        .input:focus{border-color:#f59e0b}
+        .btn-primary{width:100%;background:#f59e0b;color:#0a0a0f;border:none;border-radius:12px;padding:16px;font-size:16px;font-weight:700;font-family:inherit;cursor:pointer}
+        .btn-primary:disabled{opacity:.5}
+        .error{background:#2a0a0a;border:1px solid #f87171;border-radius:8px;padding:10px 14px;color:#f87171;font-size:12px;width:100%;word-break:break-all}
+        .dash-header{display:flex;justify-content:space-between;align-items:center;padding:20px 20px 8px;border-bottom:1px solid #1a1a2e}
+        .dash-title{font-size:20px;font-weight:800}
+        .section{padding:20px 16px 0}
+        .section-label{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:2px;color:#444;margin-bottom:12px}
+        .cards-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+        .card{background:#0f0f1a;border:1px solid #1e1e30;border-radius:16px;padding:16px}
+        .card-icon{font-size:20px;display:block;margin-bottom:8px}
+        .card-value{font-family:'Space Mono',monospace;font-size:18px;font-weight:700}
+        .solar-val{color:#fbbf24}.load-val{color:#a5b4fc}.import-val{color:#f87171}.export-val{color:#34d399}.bat-val{color:#34d399}
+        .card-label{font-size:13px;font-weight:700;margin-top:4px}
+        .balance-card{background:#0f0f1a;border:1px solid #1e1e30;border-radius:16px;padding:18px}
+        .balance-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #1a1a2a;font-size:13px}
+        .balance-label{color:#aaa}
+        .balance-value{font-family:'Space Mono',monospace;font-size:13px;font-weight:700}
+        .pos{color:#34d399}.neg{color:#f87171}
+        .balance-divider{height:1px;background:#2a2a3f;margin:8px 0}
+        .balance-neto{display:flex;justify-content:space-between;align-items:center;padding-top:8px;font-weight:700;font-size:14px}
+        .balance-neto .pos,.balance-neto .neg{font-family:'Space Mono',monospace;font-size:16px}
+        .kwh-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+        .kwh-item{background:#0f0f1a;border:1px solid #1e1e30;border-radius:12px;padding:14px 10px;text-align:center}
+        .kwh-val{font-family:'Space Mono',monospace;font-size:14px;font-weight:700}
+        .kwh-lbl{font-size:10px;color:#555;margin-top:4px}
       `}</style>
     </>
   );
