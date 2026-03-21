@@ -22,6 +22,7 @@ export default async function handler(req, res) {
         body: JSON.stringify({ account, pwd, is_local: false }),
       });
       const data = await response.json();
+      console.log('LOGIN RESPONSE:', JSON.stringify(data).substring(0, 500));
       if (data.code !== 0) return res.status(401).json({ error: data.msg || 'Login failed' });
       return res.status(200).json(data.data);
     }
@@ -31,10 +32,12 @@ export default async function handler(req, res) {
       const response = await fetch(`${SEMS_BASE}/PowerStation/GetPowerStationByUser`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Token: JSON.stringify(token) },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ page_size: 20, page_index: 1 }),
       });
       const data = await response.json();
-      return res.status(200).json(data.data);
+      console.log('PLANTS RESPONSE:', JSON.stringify(data).substring(0, 1000));
+      // Devolvemos el objeto completo para que el frontend lo maneje
+      return res.status(200).json(data.data || data);
     }
 
     if (action === 'monitor') {
@@ -45,11 +48,25 @@ export default async function handler(req, res) {
         body: JSON.stringify({ powerStationId }),
       });
       const data = await response.json();
-      return res.status(200).json(data.data);
+      console.log('MONITOR RESPONSE keys:', Object.keys(data?.data || data || {}));
+      return res.status(200).json(data.data || data);
+    }
+
+    // Debug: devuelve estructura cruda para inspeccionar
+    if (action === 'debug') {
+      const { token, endpoint, body } = req.body;
+      const response = await fetch(`${SEMS_BASE}/${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Token: JSON.stringify(token) },
+        body: JSON.stringify(body || {}),
+      });
+      const data = await response.json();
+      return res.status(200).json(data);
     }
 
     return res.status(400).json({ error: 'Unknown action' });
   } catch (err) {
+    console.error('SEMS proxy error:', err);
     return res.status(500).json({ error: err.message });
   }
 }

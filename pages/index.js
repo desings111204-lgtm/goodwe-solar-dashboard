@@ -16,12 +16,43 @@ function formatW(w) {
   return `${Math.round(w)} W`;
 }
 
+// Extrae lista de plantas de cualquier estructura de respuesta SEMS
+function extractPlantList(data) {
+  if (!data) return [];
+  // Prueba todos los campos conocidos
+  const candidates = [
+    data.list,
+    data.powerStationList,
+    data.data?.list,
+    data.data?.powerStationList,
+    data.datas,
+    data.data?.datas,
+  ];
+  for (const c of candidates) {
+    if (Array.isArray(c) && c.length > 0) return c;
+  }
+  // Si el propio objeto es un array
+  if (Array.isArray(data)) return data;
+  return [];
+}
+
+// Extrae el ID de una planta
+function getPlantId(plant) {
+  return plant.id || plant.stationId || plant.powerstation_id || plant.ps_id || plant.key || '';
+}
+
+// Extrae el nombre de una planta
+function getPlantName(plant) {
+  return plant.stationName || plant.name || plant.ps_name || plant.powerstation_name || getPlantId(plant);
+}
+
 export default function Dashboard() {
   const [step, setStep] = useState('login');
   const [account, setAccount] = useState('');
   const [pwd, setPwd] = useState('');
   const [token, setToken] = useState(null);
   const [plants, setPlants] = useState([]);
+  const [rawPlantData, setRawPlantData] = useState(null);
   const [selectedPlant, setSelectedPlant] = useState(null);
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
@@ -48,13 +79,22 @@ export default function Dashboard() {
       const tokenData = await api('login', { account, pwd });
       setToken(tokenData);
       const plantData = await api('plants', { token: tokenData });
-      const list = plantData?.list || plantData?.powerStationList || [];
+      console.log('Plant data received:', JSON.stringify(plantData).substring(0, 500));
+      setRawPlantData(plantData);
+      const list = extractPlantList(plantData);
+      console.log('Extracted plant list:', list.length, 'plants');
       if (list.length === 1) {
-        setSelectedPlant(list[0].id || list[0].stationId);
+        const pid = getPlantId(list[0]);
+        setSelectedPlant(pid);
         setStep('dashboard');
-      } else {
+      } else if (list.length > 1) {
         setPlants(list);
         setStep('plants');
+      } else {
+        // No se encontraron plantas con los campos conocidos
+        // Intentar auto-seleccionar si hay algún campo con ID
+        setPlants([]);
+        setStep('plants'); // Mostrará la pantalla de debug
       }
     } catch (e) {
       setError(e.message);
@@ -67,15 +107,21 @@ export default function Dashboard() {
     if (!token || !selectedPlant) return;
     try {
       const result = await api('monitor', { token, powerStationId: selectedPlant });
+      console.log('Monitor result keys:', Object.keys(result || {}));
+
+      // Intentar extraer datos del powerflow o del inversor
+      const d = result?.powerflow || result?.inverter?.[0]?.d || result?.solarList?.[0]?.d || result;
       const inv = result?.inverter?.[0] || result?.solarList?.[0] || {};
-      const d = result?.powerflow || inv?.d || result;
-      const ppv   = parseFloat(d?.ppv   ?? inv?.ppv   ?? 0);
-      const pload = parseFloat(d?.pload ?? inv?.pload ?? 0);
-      const pgrid = parseFloat(d?.pgrid ?? inv?.pgrid ?? 0);
-      const pbat  = parseFloat(d?.pbat  ?? inv?.pbat  ?? 0);
-      const soc   = parseFloat(result?.soc ?? inv?.soc ?? d?.soc ?? 0);
+
+      const ppv   = parseFloat(d?.ppv   ?? inv?.ppv   ?? result?.ppv   ?? 0);
+      const pload = parseFloat(d?.pload ?? inv?.pload ?? result?.pload ?? 0);
+      const pgrid = parseFloat(d?.pgrid ?? inv?.pgrid ?? result?.pgrid ?? 0);
+      const pbat  = parseFloat(d?.pbat  ?? inv?.pbat  ?? result?.pbat  ?? 0);
+      const soc   = parseFloat(result?.soc ?? inv?.soc ?? d?.soc ?? result?.battery_soc ?? 0);
+
       setData({ ppv, pload, pgrid, pbat, soc, raw: result });
       setLastUpdate(new Date());
+
       const now = Date.now();
       const last = lastPollRef.current;
       if (last) {
@@ -134,16 +180,28 @@ export default function Dashboard() {
             </button>
           </div>
         )}
+
         {step === 'plants' && (
           <div className="login-wrap">
             <h2 className="section-title">Selecciona instalación</h2>
-            {plants.map(p => (
-              <button key={p.id || p.stationId} className="btn-plant" onClick={() => { setSelectedPlant(p.id || p.stationId); setStep('dashboard'); }}>
-                {p.stationName || p.name || p.id}
-              </button>
-            ))}
+            {plants.length > 0 ? (
+              plants.map((p, i) => (
+                <button key={i} className="btn-plant" onClick={() => { setSelectedPlant(getPlantId(p)); setStep('dashboard'); }}>
+                  {getPlantName(p)}
+                </button>
+              ))
+            ) : (
+              <div style={{width:'100%'}}>
+                <p style={{color:'#f87171',fontSize:13,marginBottom:16}}>No se encontraron instalaciones automáticamente.</p>
+                <p style={{color:'#888',fontSize:12,marginBottom:8}}>Datos recibidos de SEMS (para diagnóstico):</p>
+                <pre style={{background:'#0f0f1a',border:'1px solid #2a2a3f',borderRadius:8,padding:12,fontSize:10,color:'#aaa',overflowX:'auto',whiteSpace:'pre-wrap',wordBreak:'break-all'}}>
+                  {JSON.stringify(rawPlantData, null, 2)?.substring(0, 1500)}
+                </pre>
+              </div>
+            )}
           </div>
         )}
+
         {step === 'dashboard' && (
           <div className="dashboard">
             <header className="dash-header">
@@ -159,7 +217,7 @@ export default function Dashboard() {
                 <section className="section">
                   <div className="section-label">FLUJOS AHORA</div>
                   <div className="cards-grid">
-                    <div className="card solar">
+                    <div className="card">
                       <span className="card-icon">☀️</span>
                       <div className="card-value solar-val">{formatW(data.ppv)}</div>
                       <div className="card-label">Solar</div>
@@ -171,7 +229,7 @@ export default function Dashboard() {
                       <div className="card-label">Carga</div>
                       <div className="card-sub">Consumo casa</div>
                     </div>
-                    <div className={`card ${data.pgrid > 0 ? 'import' : data.pgrid < 0 ? 'export' : ''}`}>
+                    <div className="card">
                       <span className="card-icon">{data.pgrid > 0 ? '⬇️' : data.pgrid < 0 ? '⬆️' : '↔️'}</span>
                       <div className={`card-value ${data.pgrid > 0 ? 'import-val' : data.pgrid < 0 ? 'export-val' : ''}`}>{formatW(Math.abs(data.pgrid))}</div>
                       <div className="card-label">Red</div>
@@ -185,6 +243,7 @@ export default function Dashboard() {
                     </div>
                   </div>
                 </section>
+
                 {balance && (
                   <section className="section">
                     <div className="section-label">BALANCE ECONÓMICO (SESIÓN)</div>
@@ -211,6 +270,7 @@ export default function Dashboard() {
                     </div>
                   </section>
                 )}
+
                 <section className="section">
                   <div className="section-label">kWh SESIÓN</div>
                   <div className="kwh-row">
@@ -224,6 +284,7 @@ export default function Dashboard() {
           </div>
         )}
       </div>
+
       <style jsx global>{`
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
         body { background: #0a0a0f; color: #e8e8f0; font-family: 'Syne', sans-serif; -webkit-font-smoothing: antialiased; }
@@ -239,6 +300,7 @@ export default function Dashboard() {
         .btn-primary:disabled { opacity: .5; }
         .btn-plant { width: 100%; background: #13131f; border: 1.5px solid #2a2a3f; border-radius: 12px; padding: 16px; color: #e8e8f0; font-size: 15px; font-family: inherit; cursor: pointer; text-align: left; }
         .error { background: #2a0a0a; border: 1px solid #f87171; border-radius: 8px; padding: 10px 14px; color: #f87171; font-size: 13px; width: 100%; }
+        .section-title { font-size: 20px; font-weight: 700; color: #e8e8f0; }
         .dash-header { display: flex; justify-content: space-between; align-items: center; padding: 20px 20px 8px; border-bottom: 1px solid #1a1a2e; }
         .dash-title { font-size: 20px; font-weight: 800; }
         .dash-update { font-family: 'Space Mono', monospace; font-size: 11px; color: #555; }
