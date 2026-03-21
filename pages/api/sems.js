@@ -2,11 +2,20 @@
 
 const SEMS_BASE = 'https://www.semsportal.com/api/v2';
 
-const defaultToken = JSON.stringify({
+// Token base para login (sin autenticar)
+const BASE_TOKEN = {
   version: 'v2.1.0',
   client: 'ios',
   language: 'es',
-});
+};
+
+// Construye el Token autenticado fusionando el token de login con los campos base
+function buildAuthToken(loginToken) {
+  return JSON.stringify({
+    ...BASE_TOKEN,
+    ...loginToken,
+  });
+}
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -18,7 +27,7 @@ export default async function handler(req, res) {
       const { account, pwd } = req.body;
       const response = await fetch(`${SEMS_BASE}/Common/CrossLogin`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Token: defaultToken },
+        headers: { 'Content-Type': 'application/json', Token: JSON.stringify(BASE_TOKEN) },
         body: JSON.stringify({ account, pwd, is_local: false }),
       });
       const data = await response.json();
@@ -29,39 +38,29 @@ export default async function handler(req, res) {
 
     if (action === 'plants') {
       const { token } = req.body;
+      const authToken = buildAuthToken(token);
+      console.log('AUTH TOKEN for plants:', authToken.substring(0, 200));
       const response = await fetch(`${SEMS_BASE}/PowerStation/GetPowerStationByUser`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Token: JSON.stringify(token) },
+        headers: { 'Content-Type': 'application/json', Token: authToken },
         body: JSON.stringify({ page_size: 20, page_index: 1 }),
       });
       const data = await response.json();
       console.log('PLANTS RESPONSE:', JSON.stringify(data).substring(0, 1000));
-      // Devolvemos el objeto completo para que el frontend lo maneje
       return res.status(200).json(data.data || data);
     }
 
     if (action === 'monitor') {
       const { token, powerStationId } = req.body;
+      const authToken = buildAuthToken(token);
       const response = await fetch(`${SEMS_BASE}/PowerStation/GetMonitorDetailByPowerstationId`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Token: JSON.stringify(token) },
+        headers: { 'Content-Type': 'application/json', Token: authToken },
         body: JSON.stringify({ powerStationId }),
       });
       const data = await response.json();
       console.log('MONITOR RESPONSE keys:', Object.keys(data?.data || data || {}));
       return res.status(200).json(data.data || data);
-    }
-
-    // Debug: devuelve estructura cruda para inspeccionar
-    if (action === 'debug') {
-      const { token, endpoint, body } = req.body;
-      const response = await fetch(`${SEMS_BASE}/${endpoint}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Token: JSON.stringify(token) },
-        body: JSON.stringify(body || {}),
-      });
-      const data = await response.json();
-      return res.status(200).json(data);
     }
 
     return res.status(400).json({ error: 'Unknown action' });
