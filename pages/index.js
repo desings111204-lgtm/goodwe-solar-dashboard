@@ -4,6 +4,7 @@ import Head from 'next/head';
 const TARIFA_EXPORTACION = 0.06;
 const TARIFA_IMPORTACION_PUNTA = 0.1102;
 const TARIFA_IMPORTACION_VALLE = 0.033;
+const STATION_ID = '8445d981-4fbe-414b-9d12-60bac0b7eeb1';
 
 function getTarifaImportacion() {
   const h = new Date().getHours();
@@ -21,13 +22,13 @@ export default function Dashboard() {
   const [account, setAccount] = useState('');
   const [pwd, setPwd] = useState('');
   const [token, setToken] = useState(null);
-  const [selectedPlant] = useState('8445d981-4fbe-414b-9d12-60bac0b7eeb1');
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
+  const [monitorError, setMonitorError] = useState(null);
   const [loading, setLoading] = useState(false);
   const [lastUpdate, setLastUpdate] = useState(null);
   const [accumulated, setAccumulated] = useState({ importKwh: 0, exportKwh: 0, selfKwh: 0 });
-  const [debugInfo, setDebugInfo] = useState(null);
+  const [rawDebug, setRawDebug] = useState(null);
   const intervalRef = useRef(null);
   const lastPollRef = useRef(null);
 
@@ -38,7 +39,7 @@ export default function Dashboard() {
       body: JSON.stringify(body),
     });
     const json = await r.json();
-    if (!r.ok) throw new Error(json.error || JSON.stringify(json));
+    if (!r.ok) throw new Error(json.error || JSON.stringify(json).substring(0, 300));
     return json;
   };
 
@@ -47,6 +48,7 @@ export default function Dashboard() {
     setError('');
     try {
       const tokenData = await api('login', { account, pwd });
+      console.log('Token keys:', Object.keys(tokenData));
       setToken(tokenData);
       setStep('dashboard');
     } catch (e) {
@@ -57,12 +59,13 @@ export default function Dashboard() {
   };
 
   const fetchMonitor = useCallback(async () => {
-    if (!token || !selectedPlant) return;
+    if (!token) return;
     try {
-      const result = await api('monitor', { token, powerStationId: selectedPlant });
+      setMonitorError(null);
+      const result = await api('monitor', { token, powerStationId: STATION_ID });
       console.log('Monitor result:', JSON.stringify(result).substring(0, 600));
+      setRawDebug(result);
 
-      // Intentar extraer flujos de potencia de todas las estructuras conocidas
       const d = result?.powerflow || result?.inverter?.[0]?.d || result?.solarList?.[0]?.d || result;
       const inv = result?.inverter?.[0] || result?.solarList?.[0] || {};
 
@@ -72,13 +75,14 @@ export default function Dashboard() {
       const pbat  = parseFloat(d?.pbat  ?? inv?.pbat  ?? result?.pbat  ?? 0);
       const soc   = parseFloat(result?.soc ?? inv?.soc ?? d?.soc ?? result?.battery_soc ?? 0);
 
-      setData({ ppv, pload, pgrid, pbat, soc });
-      setDebugInfo(result);
-      setLastUpdate(new Date());
+      // Solo mostrar datos si al menos ppv o pload tienen valor
+      if (ppv > 0 || pload > 0 || soc > 0) {
+        setData({ ppv, pload, pgrid, pbat, soc });
+      }
 
       const now = Date.now();
       const last = lastPollRef.current;
-      if (last) {
+      if (last && (ppv > 0 || pload > 0)) {
         const dtH = (now - last) / 3600000;
         setAccumulated(prev => ({
           importKwh: prev.importKwh + (pgrid > 0 ? pgrid * dtH / 1000 : 0),
@@ -87,10 +91,12 @@ export default function Dashboard() {
         }));
       }
       lastPollRef.current = now;
+      setLastUpdate(new Date());
     } catch (e) {
       console.error('Monitor error:', e);
+      setMonitorError(e.message);
     }
-  }, [token, selectedPlant]);
+  }, [token]);
 
   useEffect(() => {
     if (step === 'dashboard') {
@@ -102,12 +108,11 @@ export default function Dashboard() {
 
   const balance = data ? (() => {
     const tarifa = getTarifaImportacion();
-    return {
-      ingresoExportacion: accumulated.exportKwh * TARIFA_EXPORTACION,
-      ahorroAutoconsumo:  accumulated.selfKwh   * tarifa,
-      gastoImportacion:   accumulated.importKwh * tarifa,
-      get neto() { return this.ingresoExportacion + this.ahorroAutoconsumo - this.gastoImportacion; },
-    };
+    const ingresoExportacion = accumulated.exportKwh * TARIFA_EXPORTACION;
+    const ahorroAutoconsumo  = accumulated.selfKwh   * tarifa;
+    const gastoImportacion   = accumulated.importKwh * tarifa;
+    return { ingresoExportacion, ahorroAutoconsumo, gastoImportacion,
+      neto: ingresoExportacion + ahorroAutoconsumo - gastoImportacion };
   })() : null;
 
   return (
@@ -126,11 +131,7 @@ export default function Dashboard() {
             <p className="login-sub">Accede con tu cuenta SEMS+</p>
             <input className="input" type="email" placeholder="Email" value={account} onChange={e => setAccount(e.target.value)} />
             <input className="input" type="password" placeholder="Contraseña" value={pwd} onChange={e => setPwd(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleLogin()} />
-            {error && (
-              <div className="error">
-                <div>{error}</div>
-              </div>
-            )}
+            {error && <div className="error">{error}</div>}
             <button className="btn-primary" onClick={handleLogin} disabled={loading}>
               {loading ? 'Conectando...' : 'Entrar'}
             </button>
@@ -146,19 +147,29 @@ export default function Dashboard() {
               </div>
             </header>
 
-            {!data ? (
-              <div>
-                <div className="loading-msg">Obteniendo datos...</div>
-                {debugInfo && (
-                  <div style={{padding:'16px'}}>
-                    <div style={{fontSize:10,color:'#444',fontFamily:'Space Mono',marginBottom:8}}>RESPUESTA API (DIAGNÓSTICO)</div>
-                    <pre style={{background:'#0f0f1a',border:'1px solid #2a2a3f',borderRadius:8,padding:12,fontSize:10,color:'#aaa',overflowX:'auto',whiteSpace:'pre-wrap',wordBreak:'break-all'}}>
-                      {JSON.stringify(debugInfo, null, 2)?.substring(0, 2000)}
-                    </pre>
-                  </div>
-                )}
+            {/* Error de monitor */}
+            {monitorError && (
+              <div style={{margin:'16px',background:'#1a0a0a',border:'1px solid #f87171',borderRadius:10,padding:12}}>
+                <div style={{color:'#f87171',fontSize:12,marginBottom:8,fontFamily:'Space Mono'}}>ERROR MONITOR:</div>
+                <div style={{color:'#f87171',fontSize:11,wordBreak:'break-all'}}>{monitorError}</div>
               </div>
-            ) : (
+            )}
+
+            {/* Debug: respuesta cruda si no hay datos */}
+            {!data && rawDebug && (
+              <div style={{padding:'0 16px'}}>
+                <div style={{fontSize:9,color:'#444',fontFamily:'Space Mono',marginBottom:8,marginTop:16}}>RESPUESTA API (DIAGNÓSTICO):</div>
+                <pre style={{background:'#0f0f1a',border:'1px solid #2a2a3f',borderRadius:8,padding:12,fontSize:10,color:'#aaa',overflowX:'auto',whiteSpace:'pre-wrap',wordBreak:'break-all'}}>
+                  {JSON.stringify(rawDebug, null, 2)?.substring(0, 2000)}
+                </pre>
+              </div>
+            )}
+
+            {!data && !rawDebug && !monitorError && (
+              <div className="loading-msg">Obteniendo datos...</div>
+            )}
+
+            {data && (
               <>
                 <section className="section">
                   <div className="section-label">FLUJOS AHORA</div>
@@ -227,6 +238,19 @@ export default function Dashboard() {
                     <div className="kwh-item"><div className="kwh-val import-val">{accumulated.importKwh.toFixed(3)}</div><div className="kwh-lbl">Importado</div></div>
                   </div>
                 </section>
+
+                {/* Debug raw siempre visible al fondo */}
+                {rawDebug && (
+                  <div style={{padding:'18px 16px 0'}}>
+                    <div style={{fontSize:9,color:'#222',fontFamily:'Space Mono',marginBottom:6}}>RAW API (tap para expandir)</div>
+                    <details>
+                      <summary style={{fontSize:10,color:'#333',fontFamily:'Space Mono',cursor:'pointer'}}>Ver respuesta</summary>
+                      <pre style={{background:'#0a0a12',border:'1px solid #1e1e30',borderRadius:8,padding:10,fontSize:9,color:'#555',overflowX:'auto',whiteSpace:'pre-wrap',wordBreak:'break-all',marginTop:8}}>
+                        {JSON.stringify(rawDebug, null, 2)?.substring(0, 3000)}
+                      </pre>
+                    </details>
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -250,7 +274,7 @@ export default function Dashboard() {
         .dash-header { display: flex; justify-content: space-between; align-items: center; padding: 20px 20px 8px; border-bottom: 1px solid #1a1a2e; }
         .dash-title { font-size: 20px; font-weight: 800; }
         .dash-update { font-family: 'Space Mono', monospace; font-size: 11px; color: #555; }
-        .loading-msg { text-align: center; padding: 40px 20px 10px; color: #555; font-family: 'Space Mono', monospace; font-size: 13px; }
+        .loading-msg { text-align: center; padding: 40px 20px; color: #555; font-family: 'Space Mono', monospace; font-size: 13px; }
         .section { padding: 20px 16px 0; }
         .section-label { font-family: 'Space Mono', monospace; font-size: 10px; letter-spacing: 2px; color: #444; margin-bottom: 12px; }
         .cards-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
