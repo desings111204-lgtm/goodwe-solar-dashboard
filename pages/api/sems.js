@@ -1,6 +1,5 @@
 // Proxy SEMS Portal API
 const SEMS_BASE = 'https://www.semsportal.com/api/v2';
-
 const BASE_TOKEN = { version: 'v2.1.0', client: 'ios', language: 'en' };
 
 export default async function handler(req, res) {
@@ -8,7 +7,6 @@ export default async function handler(req, res) {
   const { action } = req.query;
 
   try {
-    // LOGIN
     if (action === 'login') {
       const { account, pwd } = req.body;
       const response = await fetch(`${SEMS_BASE}/Common/CrossLogin`, {
@@ -19,30 +17,31 @@ export default async function handler(req, res) {
       const raw = await response.text();
       let data;
       try { data = JSON.parse(raw); }
-      catch(e) { return res.status(500).json({ error: 'Login not JSON: ' + raw.substring(0, 300) }); }
-
-      // Log estructura completa para diagnosticar
-      console.log('LOGIN FULL RESPONSE:', JSON.stringify(data));
-
+      catch(e) { return res.status(500).json({ error: 'Login not JSON: ' + raw.substring(0, 200) }); }
+      console.log('LOGIN RESPONSE:', JSON.stringify(data).substring(0, 600));
       if (data.code !== 0) return res.status(401).json({ error: data.msg || 'Login failed' });
-
-      // Devolvemos data.data completo — el cliente lo guardará y lo enviará de vuelta tal cual
       return res.status(200).json(data.data);
     }
 
-    // MONITOR — recibe el objeto token tal como lo guardó el cliente tras el login
     if (action === 'monitor') {
       const { token, powerStationId } = req.body;
 
-      // Estrategia: intentar con el token tal cual del login (sin reconstruir nada)
-      // El objeto login suele tener la forma: { uid, timestamp, token, api_domain, ... }
-      // Lo pasamos tal cual como header Token
-      const authToken = JSON.stringify(token);
-      console.log('MONITOR authToken (raw):', authToken.substring(0, 400));
+      // SEMS requiere timestamp actualizado en cada petición
+      const nowTimestamp = Math.floor(Date.now() / 1000);
+
+      const authToken = JSON.stringify({
+        version: 'v2.1.0',
+        client:  'ios',
+        language: 'en',
+        uid:       token.uid       || '',
+        timestamp: nowTimestamp,
+        token:     token.token     || '',
+      });
 
       const baseUrl = token.api_domain ? `${token.api_domain}/api/v2` : SEMS_BASE;
-      console.log('MONITOR baseUrl:', baseUrl);
-      console.log('MONITOR powerStationId:', powerStationId);
+      console.log('MONITOR authToken:', authToken.substring(0, 300));
+      console.log('MONITOR url:', `${baseUrl}/PowerStation/GetMonitorDetailByPowerstationId`);
+      console.log('MONITOR stationId:', powerStationId);
 
       const response = await fetch(`${baseUrl}/PowerStation/GetMonitorDetailByPowerstationId`, {
         method: 'POST',
@@ -50,12 +49,10 @@ export default async function handler(req, res) {
         body: JSON.stringify({ powerStationId }),
       });
       const raw = await response.text();
-      console.log('MONITOR RAW (500chars):', raw.substring(0, 500));
-
+      console.log('MONITOR RAW:', raw.substring(0, 600));
       let data;
       try { data = JSON.parse(raw); }
-      catch(e) { return res.status(500).json({ error: 'Monitor not JSON: ' + raw.substring(0, 300) }); }
-
+      catch(e) { return res.status(500).json({ error: 'Monitor not JSON: ' + raw.substring(0, 200) }); }
       if (data.code !== 0) return res.status(400).json({ error: data.msg, code: data.code, raw: data });
       return res.status(200).json(data.data || data);
     }
