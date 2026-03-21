@@ -16,49 +16,18 @@ function formatW(w) {
   return `${Math.round(w)} W`;
 }
 
-// Extrae lista de plantas de cualquier estructura de respuesta SEMS
-function extractPlantList(data) {
-  if (!data) return [];
-  // Prueba todos los campos conocidos
-  const candidates = [
-    data.list,
-    data.powerStationList,
-    data.data?.list,
-    data.data?.powerStationList,
-    data.datas,
-    data.data?.datas,
-  ];
-  for (const c of candidates) {
-    if (Array.isArray(c) && c.length > 0) return c;
-  }
-  // Si el propio objeto es un array
-  if (Array.isArray(data)) return data;
-  return [];
-}
-
-// Extrae el ID de una planta
-function getPlantId(plant) {
-  return plant.id || plant.stationId || plant.powerstation_id || plant.ps_id || plant.key || '';
-}
-
-// Extrae el nombre de una planta
-function getPlantName(plant) {
-  return plant.stationName || plant.name || plant.ps_name || plant.powerstation_name || getPlantId(plant);
-}
-
 export default function Dashboard() {
   const [step, setStep] = useState('login');
   const [account, setAccount] = useState('');
   const [pwd, setPwd] = useState('');
   const [token, setToken] = useState(null);
-  const [plants, setPlants] = useState([]);
-  const [rawPlantData, setRawPlantData] = useState(null);
-  const [selectedPlant, setSelectedPlant] = useState(null);
+  const [selectedPlant] = useState('8445d981-4fbe-414b-9d12-60bac0b7eeb1');
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [lastUpdate, setLastUpdate] = useState(null);
   const [accumulated, setAccumulated] = useState({ importKwh: 0, exportKwh: 0, selfKwh: 0 });
+  const [debugInfo, setDebugInfo] = useState(null);
   const intervalRef = useRef(null);
   const lastPollRef = useRef(null);
 
@@ -68,8 +37,9 @@ export default function Dashboard() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    if (!r.ok) throw new Error((await r.json()).error);
-    return r.json();
+    const json = await r.json();
+    if (!r.ok) throw new Error(json.error || JSON.stringify(json));
+    return json;
   };
 
   const handleLogin = async () => {
@@ -78,24 +48,7 @@ export default function Dashboard() {
     try {
       const tokenData = await api('login', { account, pwd });
       setToken(tokenData);
-      const plantData = await api('plants', { token: tokenData });
-      console.log('Plant data received:', JSON.stringify(plantData).substring(0, 500));
-      setRawPlantData(plantData);
-      const list = extractPlantList(plantData);
-      console.log('Extracted plant list:', list.length, 'plants');
-      if (list.length === 1) {
-        const pid = getPlantId(list[0]);
-        setSelectedPlant(pid);
-        setStep('dashboard');
-      } else if (list.length > 1) {
-        setPlants(list);
-        setStep('plants');
-      } else {
-        // No se encontraron plantas con los campos conocidos
-        // Intentar auto-seleccionar si hay algún campo con ID
-        setPlants([]);
-        setStep('plants'); // Mostrará la pantalla de debug
-      }
+      setStep('dashboard');
     } catch (e) {
       setError(e.message);
     } finally {
@@ -107,9 +60,9 @@ export default function Dashboard() {
     if (!token || !selectedPlant) return;
     try {
       const result = await api('monitor', { token, powerStationId: selectedPlant });
-      console.log('Monitor result keys:', Object.keys(result || {}));
+      console.log('Monitor result:', JSON.stringify(result).substring(0, 600));
 
-      // Intentar extraer datos del powerflow o del inversor
+      // Intentar extraer flujos de potencia de todas las estructuras conocidas
       const d = result?.powerflow || result?.inverter?.[0]?.d || result?.solarList?.[0]?.d || result;
       const inv = result?.inverter?.[0] || result?.solarList?.[0] || {};
 
@@ -119,7 +72,8 @@ export default function Dashboard() {
       const pbat  = parseFloat(d?.pbat  ?? inv?.pbat  ?? result?.pbat  ?? 0);
       const soc   = parseFloat(result?.soc ?? inv?.soc ?? d?.soc ?? result?.battery_soc ?? 0);
 
-      setData({ ppv, pload, pgrid, pbat, soc, raw: result });
+      setData({ ppv, pload, pgrid, pbat, soc });
+      setDebugInfo(result);
       setLastUpdate(new Date());
 
       const now = Date.now();
@@ -129,7 +83,7 @@ export default function Dashboard() {
         setAccumulated(prev => ({
           importKwh: prev.importKwh + (pgrid > 0 ? pgrid * dtH / 1000 : 0),
           exportKwh: prev.exportKwh + (pgrid < 0 ? Math.abs(pgrid) * dtH / 1000 : 0),
-          selfKwh: prev.selfKwh + (Math.max(0, ppv - Math.max(0, -pgrid)) * dtH / 1000),
+          selfKwh:   prev.selfKwh   + (Math.max(0, ppv - Math.max(0, -pgrid)) * dtH / 1000),
         }));
       }
       lastPollRef.current = now;
@@ -148,14 +102,11 @@ export default function Dashboard() {
 
   const balance = data ? (() => {
     const tarifa = getTarifaImportacion();
-    const ingresoExportacion = accumulated.exportKwh * TARIFA_EXPORTACION;
-    const ahorroAutoconsumo = accumulated.selfKwh * tarifa;
-    const gastoImportacion = accumulated.importKwh * tarifa;
     return {
-      ingresoExportacion,
-      ahorroAutoconsumo,
-      gastoImportacion,
-      neto: ingresoExportacion + ahorroAutoconsumo - gastoImportacion,
+      ingresoExportacion: accumulated.exportKwh * TARIFA_EXPORTACION,
+      ahorroAutoconsumo:  accumulated.selfKwh   * tarifa,
+      gastoImportacion:   accumulated.importKwh * tarifa,
+      get neto() { return this.ingresoExportacion + this.ahorroAutoconsumo - this.gastoImportacion; },
     };
   })() : null;
 
@@ -167,38 +118,22 @@ export default function Dashboard() {
         <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap" rel="stylesheet" />
       </Head>
       <div className="app">
+
         {step === 'login' && (
           <div className="login-wrap">
             <div className="login-logo">☀️</div>
             <h1 className="login-title">GoodWe<br /><span>Dashboard</span></h1>
-            <p className="login-sub">Accede con tu cuenta SEMS Portal</p>
-            <input className="input" type="email" placeholder="Email SEMS" value={account} onChange={e => setAccount(e.target.value)} />
+            <p className="login-sub">Accede con tu cuenta SEMS+</p>
+            <input className="input" type="email" placeholder="Email" value={account} onChange={e => setAccount(e.target.value)} />
             <input className="input" type="password" placeholder="Contraseña" value={pwd} onChange={e => setPwd(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleLogin()} />
-            {error && <div className="error">{error}</div>}
+            {error && (
+              <div className="error">
+                <div>{error}</div>
+              </div>
+            )}
             <button className="btn-primary" onClick={handleLogin} disabled={loading}>
               {loading ? 'Conectando...' : 'Entrar'}
             </button>
-          </div>
-        )}
-
-        {step === 'plants' && (
-          <div className="login-wrap">
-            <h2 className="section-title">Selecciona instalación</h2>
-            {plants.length > 0 ? (
-              plants.map((p, i) => (
-                <button key={i} className="btn-plant" onClick={() => { setSelectedPlant(getPlantId(p)); setStep('dashboard'); }}>
-                  {getPlantName(p)}
-                </button>
-              ))
-            ) : (
-              <div style={{width:'100%'}}>
-                <p style={{color:'#f87171',fontSize:13,marginBottom:16}}>No se encontraron instalaciones automáticamente.</p>
-                <p style={{color:'#888',fontSize:12,marginBottom:8}}>Datos recibidos de SEMS (para diagnóstico):</p>
-                <pre style={{background:'#0f0f1a',border:'1px solid #2a2a3f',borderRadius:8,padding:12,fontSize:10,color:'#aaa',overflowX:'auto',whiteSpace:'pre-wrap',wordBreak:'break-all'}}>
-                  {JSON.stringify(rawPlantData, null, 2)?.substring(0, 1500)}
-                </pre>
-              </div>
-            )}
           </div>
         )}
 
@@ -210,8 +145,19 @@ export default function Dashboard() {
                 {lastUpdate ? `⟳ ${lastUpdate.toLocaleTimeString('es-ES')}` : 'Cargando...'}
               </div>
             </header>
+
             {!data ? (
-              <div className="loading-msg">Obteniendo datos...</div>
+              <div>
+                <div className="loading-msg">Obteniendo datos...</div>
+                {debugInfo && (
+                  <div style={{padding:'16px'}}>
+                    <div style={{fontSize:10,color:'#444',fontFamily:'Space Mono',marginBottom:8}}>RESPUESTA API (DIAGNÓSTICO)</div>
+                    <pre style={{background:'#0f0f1a',border:'1px solid #2a2a3f',borderRadius:8,padding:12,fontSize:10,color:'#aaa',overflowX:'auto',whiteSpace:'pre-wrap',wordBreak:'break-all'}}>
+                      {JSON.stringify(debugInfo, null, 2)?.substring(0, 2000)}
+                    </pre>
+                  </div>
+                )}
+              </div>
             ) : (
               <>
                 <section className="section">
@@ -231,7 +177,9 @@ export default function Dashboard() {
                     </div>
                     <div className="card">
                       <span className="card-icon">{data.pgrid > 0 ? '⬇️' : data.pgrid < 0 ? '⬆️' : '↔️'}</span>
-                      <div className={`card-value ${data.pgrid > 0 ? 'import-val' : data.pgrid < 0 ? 'export-val' : ''}`}>{formatW(Math.abs(data.pgrid))}</div>
+                      <div className={`card-value ${data.pgrid > 0 ? 'import-val' : data.pgrid < 0 ? 'export-val' : ''}`}>
+                        {formatW(Math.abs(data.pgrid))}
+                      </div>
                       <div className="card-label">Red</div>
                       <div className="card-sub">{data.pgrid > 0 ? 'Importando' : data.pgrid < 0 ? 'Exportando' : 'Sin flujo'}</div>
                     </div>
@@ -298,13 +246,11 @@ export default function Dashboard() {
         .input:focus { border-color: #f59e0b; }
         .btn-primary { width: 100%; background: #f59e0b; color: #0a0a0f; border: none; border-radius: 12px; padding: 16px; font-size: 16px; font-weight: 700; font-family: inherit; cursor: pointer; }
         .btn-primary:disabled { opacity: .5; }
-        .btn-plant { width: 100%; background: #13131f; border: 1.5px solid #2a2a3f; border-radius: 12px; padding: 16px; color: #e8e8f0; font-size: 15px; font-family: inherit; cursor: pointer; text-align: left; }
-        .error { background: #2a0a0a; border: 1px solid #f87171; border-radius: 8px; padding: 10px 14px; color: #f87171; font-size: 13px; width: 100%; }
-        .section-title { font-size: 20px; font-weight: 700; color: #e8e8f0; }
+        .error { background: #2a0a0a; border: 1px solid #f87171; border-radius: 8px; padding: 10px 14px; color: #f87171; font-size: 12px; width: 100%; word-break: break-all; }
         .dash-header { display: flex; justify-content: space-between; align-items: center; padding: 20px 20px 8px; border-bottom: 1px solid #1a1a2e; }
         .dash-title { font-size: 20px; font-weight: 800; }
         .dash-update { font-family: 'Space Mono', monospace; font-size: 11px; color: #555; }
-        .loading-msg { text-align: center; padding: 60px 20px; color: #555; font-family: 'Space Mono', monospace; font-size: 13px; }
+        .loading-msg { text-align: center; padding: 40px 20px 10px; color: #555; font-family: 'Space Mono', monospace; font-size: 13px; }
         .section { padding: 20px 16px 0; }
         .section-label { font-family: 'Space Mono', monospace; font-size: 10px; letter-spacing: 2px; color: #444; margin-bottom: 12px; }
         .cards-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
