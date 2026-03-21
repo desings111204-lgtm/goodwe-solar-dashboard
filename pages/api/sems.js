@@ -1,22 +1,22 @@
-// Proxy para la API de SEMS Portal - evita CORS desde el navegador
-// Base URL y versión según proyectos comunidad GoodWe
+// Proxy para la API de SEMS Portal
+// Basado en integraciones conocidas que funcionan: Home Assistant GoodWe, sems-portal-api
 
-const SEMS_LOGIN_URL = 'https://www.semsportal.com/api/v1/Common/CrossLogin';
-const SEMS_BASE     = 'https://www.semsportal.com/api/v2';
+const SEMS_BASE = 'https://www.semsportal.com/api/v2';
 
-// Token base para llamadas sin autenticar
+// Token base para login - version vacía es lo que acepta SEMS
 const BASE_TOKEN = {
-  version: 'v2.0.4',
-  client:  'ios',
+  version: '',
+  client: 'ios',
   language: 'en',
 };
 
-// Fusiona el token de login con los campos de versión requeridos
 function buildAuthToken(loginToken) {
   return JSON.stringify({
-    ...BASE_TOKEN,
-    uid:       loginToken.uid       || loginToken.user?.uid || '',
-    timestamp: loginToken.timestamp || '',
+    version:   '',
+    client:    'ios',
+    language:  'en',
+    uid:       loginToken.uid       || loginToken.user?.uid       || '',
+    timestamp: loginToken.timestamp || 0,
     token:     loginToken.token     || '',
   });
 }
@@ -27,13 +27,13 @@ export default async function handler(req, res) {
   const { action } = req.query;
 
   try {
-    // ── LOGIN ──────────────────────────────────────────────────────────
+    // LOGIN
     if (action === 'login') {
       const { account, pwd } = req.body;
-      const response = await fetch(SEMS_LOGIN_URL, {
-        method:  'POST',
+      const response = await fetch(`${SEMS_BASE}/Common/CrossLogin`, {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json', Token: JSON.stringify(BASE_TOKEN) },
-        body:    JSON.stringify({ account, pwd, is_local: false }),
+        body: JSON.stringify({ account, pwd, is_local: false }),
       });
       const data = await response.json();
       console.log('LOGIN:', JSON.stringify(data).substring(0, 400));
@@ -41,15 +41,15 @@ export default async function handler(req, res) {
       return res.status(200).json(data.data);
     }
 
-    // ── PLANTAS ────────────────────────────────────────────────────────
+    // PLANTAS
     if (action === 'plants') {
       const { token } = req.body;
       const authToken = buildAuthToken(token);
-      console.log('AUTH TOKEN:', authToken.substring(0, 200));
+      console.log('AUTH TOKEN plants:', authToken.substring(0, 300));
       const response = await fetch(`${SEMS_BASE}/PowerStation/GetPowerStationByUser`, {
-        method:  'POST',
+        method: 'POST',
         headers: { 'Content-Type': 'application/json', Token: authToken },
-        body:    JSON.stringify({ page_size: 20, page_index: 1 }),
+        body: JSON.stringify({ page_size: 20, page_index: 1 }),
       });
       const data = await response.json();
       console.log('PLANTS:', JSON.stringify(data).substring(0, 800));
@@ -57,14 +57,14 @@ export default async function handler(req, res) {
       return res.status(200).json(data.data || data);
     }
 
-    // ── MONITOR ────────────────────────────────────────────────────────
+    // MONITOR
     if (action === 'monitor') {
       const { token, powerStationId } = req.body;
       const authToken = buildAuthToken(token);
       const response = await fetch(`${SEMS_BASE}/PowerStation/GetMonitorDetailByPowerstationId`, {
-        method:  'POST',
+        method: 'POST',
         headers: { 'Content-Type': 'application/json', Token: authToken },
-        body:    JSON.stringify({ powerStationId }),
+        body: JSON.stringify({ powerStationId }),
       });
       const data = await response.json();
       console.log('MONITOR keys:', Object.keys(data?.data || data || {}));
