@@ -5,6 +5,7 @@ const TARIFA_EXPORTACION = 0.06;
 const TARIFA_IMPORTACION_PUNTA = 0.1102;
 const TARIFA_IMPORTACION_VALLE = 0.033;
 const STATION_ID = '8445d981-4fbe-414b-9d12-60bac0b7eeb1';
+const SEMS_BASE = 'https://www.semsportal.com/api/v2';
 
 function getTarifaImportacion() {
   const h = new Date().getHours();
@@ -30,42 +31,66 @@ export default function Dashboard() {
   const intervalRef = useRef(null);
   const lastPollRef = useRef(null);
 
-  const api = async (action, body) => {
-    const r = await fetch(`/api/sems?action=${action}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const json = await r.json();
-    if (!r.ok) throw Object.assign(new Error(json.error || 'API error'), { detail: json });
-    return json;
-  };
-
+  // Login via proxy (servidor) para evitar CORS en CrossLogin
   const handleLogin = async () => {
     setLoading(true); setError('');
     try {
-      const tokenData = await api('login', { account, pwd });
-      setToken(tokenData);
+      const r = await fetch('/api/sems', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account, pwd }),
+      });
+      const json = await r.json();
+      if (!r.ok) throw new Error(json.error || 'Login failed');
+      setToken(json);
       setStep('dashboard');
     } catch(e) { setError(e.message); }
     finally { setLoading(false); }
   };
 
+  // Monitor DIRECTAMENTE desde el browser (IP residencial, no AWS)
   const fetchMonitor = useCallback(async () => {
     if (!token) return;
     try {
       setMonitorError(null);
-      const result = await api('monitor', { token, powerStationId: STATION_ID });
-      const d = result?.powerflow || result?.inverter?.[0]?.d || result?.solarList?.[0]?.d || result;
-      const inv = result?.inverter?.[0] || result?.solarList?.[0] || {};
-      const ppv   = parseFloat(d?.ppv   ?? inv?.ppv   ?? result?.ppv   ?? 0);
-      const pload = parseFloat(d?.pload ?? inv?.pload ?? result?.pload ?? 0);
-      const pgrid = parseFloat(d?.pgrid ?? inv?.pgrid ?? result?.pgrid ?? 0);
-      const pbat  = parseFloat(d?.pbat  ?? inv?.pbat  ?? result?.pbat  ?? 0);
-      const soc   = parseFloat(result?.soc ?? inv?.soc ?? d?.soc ?? 0);
-      if (ppv > 0 || pload > 0 || soc > 0) setData({ ppv, pload, pgrid, pbat, soc });
+      const authToken = JSON.stringify(token);
+      const response = await fetch(`${SEMS_BASE}/PowerStation/GetMonitorDetailByPowerstationId`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Token': authToken },
+        body: JSON.stringify({ powerStationId: STATION_ID }),
+      });
+      const raw = await response.text();
+      let result;
+      try { result = JSON.parse(raw); }
+      catch(e) { throw new Error('Respuesta no JSON: ' + raw.substring(0, 100)); }
+
+      if (result.code !== 0) {
+        throw new Error(`Error ${result.code}: ${result.msg}`);
+      }
+
+      const d = result.data;
+      console.log('Monitor data keys:', Object.keys(d || {}));
+
+      // Extraer flujos de todas las estructuras posibles
+      const flow = d?.powerflow || d?.inverter?.[0]?.d || d?.solarList?.[0]?.d || d;
+      const inv  = d?.inverter?.[0] || d?.solarList?.[0] || {};
+
+      const ppv   = parseFloat(flow?.ppv   ?? inv?.ppv   ?? d?.ppv   ?? 0);
+      const pload = parseFloat(flow?.pload ?? inv?.pload ?? d?.pload ?? 0);
+      const pgrid = parseFloat(flow?.pgrid ?? inv?.pgrid ?? d?.pgrid ?? 0);
+      const pbat  = parseFloat(flow?.pbat  ?? inv?.pbat  ?? d?.pbat  ?? 0);
+      const soc   = parseFloat(d?.soc ?? inv?.soc ?? flow?.soc ?? 0);
+
+      // Si todos son 0, mostrar debug
+      if (ppv === 0 && pload === 0 && soc === 0) {
+        console.log('All zeros - raw data:', JSON.stringify(d).substring(0, 500));
+        setMonitorError({ msg: 'Datos en cero - ver debug', debug: d });
+      } else {
+        setData({ ppv, pload, pgrid, pbat, soc });
+      }
+
       const now = Date.now();
-      if (lastPollRef.current) {
+      if (lastPollRef.current && (ppv > 0 || pload > 0)) {
         const dtH = (now - lastPollRef.current) / 3600000;
         setAccumulated(prev => ({
           importKwh: prev.importKwh + (pgrid > 0 ? pgrid*dtH/1000 : 0),
@@ -76,7 +101,8 @@ export default function Dashboard() {
       lastPollRef.current = now;
       setLastUpdate(new Date());
     } catch(e) {
-      setMonitorError({ msg: e.message, detail: e.detail });
+      console.error('Monitor error:', e);
+      setMonitorError({ msg: e.message });
     }
   }, [token]);
 
@@ -128,33 +154,13 @@ export default function Dashboard() {
               </div>
             </header>
 
-            {/* DEBUG TOKEN - visible para diagnóstico */}
-            {token && !data && (
-              <div style={{margin:'14px 14px 0',background:'#0a0a14',border:'1px solid #2a2a3f',borderRadius:10,padding:12}}>
-                <div style={{fontSize:9,color:'#555',fontFamily:'Space Mono',marginBottom:6}}>TOKEN RECIBIDO DEL LOGIN:</div>
-                <pre style={{fontSize:10,color:'#7af',whiteSpace:'pre-wrap',wordBreak:'break-all'}}>
-                  {JSON.stringify({
-                    keys: Object.keys(token),
-                    uid: token.uid ? token.uid.substring(0,8)+'...' : 'N/A',
-                    hasToken: !!token.token,
-                    hasTimestamp: !!token.timestamp,
-                    api_domain: token.api_domain || 'N/A',
-                    version: token.version || 'N/A',
-                    client: token.client || 'N/A',
-                    language: token.language || 'N/A',
-                  }, null, 2)}
-                </pre>
-              </div>
-            )}
-
-            {/* Error monitor con detalle */}
             {monitorError && (
-              <div style={{margin:'14px 14px 0',background:'#1a0808',border:'1px solid #f87171',borderRadius:10,padding:12}}>
-                <div style={{color:'#f87171',fontSize:11,fontFamily:'Space Mono',marginBottom:6}}>ERROR MONITOR:</div>
-                <div style={{color:'#f87171',fontSize:12,marginBottom:8}}>{monitorError.msg}</div>
-                {monitorError.detail && (
-                  <pre style={{fontSize:9,color:'#f87171',opacity:0.7,whiteSpace:'pre-wrap',wordBreak:'break-all'}}>
-                    {JSON.stringify(monitorError.detail, null, 2)}
+              <div style={{margin:'14px',background:'#1a0808',border:'1px solid #f87171',borderRadius:10,padding:12}}>
+                <div style={{color:'#f87171',fontSize:12,marginBottom:6,fontFamily:'Space Mono'}}>ERROR:</div>
+                <div style={{color:'#f87171',fontSize:13}}>{monitorError.msg}</div>
+                {monitorError.debug && (
+                  <pre style={{fontSize:9,color:'#f87171',opacity:0.6,marginTop:8,whiteSpace:'pre-wrap',wordBreak:'break-all'}}>
+                    {JSON.stringify(monitorError.debug, null, 2)?.substring(0,1500)}
                   </pre>
                 )}
               </div>
@@ -173,21 +179,27 @@ export default function Dashboard() {
                       <span className="card-icon">☀️</span>
                       <div className="card-value solar-val">{formatW(data.ppv)}</div>
                       <div className="card-label">Solar</div>
+                      <div className="card-sub">{data.ppv > 0 ? 'Generando' : 'Sin generación'}</div>
                     </div>
                     <div className="card">
                       <span className="card-icon">🏠</span>
                       <div className="card-value load-val">{formatW(data.pload)}</div>
                       <div className="card-label">Carga</div>
+                      <div className="card-sub">Consumo casa</div>
                     </div>
                     <div className="card">
                       <span className="card-icon">{data.pgrid>0?'⬇️':data.pgrid<0?'⬆️':'↔️'}</span>
-                      <div className={`card-value ${data.pgrid>0?'import-val':data.pgrid<0?'export-val':''}`}>{formatW(Math.abs(data.pgrid))}</div>
-                      <div className="card-label">{data.pgrid>0?'Importando':data.pgrid<0?'Exportando':'Red'}</div>
+                      <div className={`card-value ${data.pgrid>0?'import-val':data.pgrid<0?'export-val':''}`}>
+                        {formatW(Math.abs(data.pgrid))}
+                      </div>
+                      <div className="card-label">Red</div>
+                      <div className="card-sub">{data.pgrid>0?'Importando':data.pgrid<0?'Exportando':'Sin flujo'}</div>
                     </div>
                     <div className="card">
                       <span className="card-icon">🔋</span>
                       <div className="card-value bat-val">{data.soc}%</div>
                       <div className="card-label">Batería</div>
+                      <div className="card-sub">{formatW(Math.abs(data.pbat))} · {data.pbat>0?'Cargando':data.pbat<0?'Descargando':'Reposo'}</div>
                     </div>
                   </div>
                 </section>
@@ -241,6 +253,7 @@ export default function Dashboard() {
         .card-value{font-family:'Space Mono',monospace;font-size:18px;font-weight:700}
         .solar-val{color:#fbbf24}.load-val{color:#a5b4fc}.import-val{color:#f87171}.export-val{color:#34d399}.bat-val{color:#34d399}
         .card-label{font-size:13px;font-weight:700;margin-top:4px}
+        .card-sub{font-size:11px;color:#555;margin-top:3px;font-family:'Space Mono',monospace}
         .balance-card{background:#0f0f1a;border:1px solid #1e1e30;border-radius:16px;padding:18px}
         .balance-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #1a1a2a;font-size:13px}
         .balance-label{color:#aaa}
