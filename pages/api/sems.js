@@ -1,21 +1,13 @@
-// Proxy para SEMS+ API (semsplus.goodwe.com)
+// Proxy para SEMS Portal API
+// API: www.semsportal.com (no semsplus que devuelve HTML)
 
-const SEMS_BASE = 'https://semsplus.goodwe.com/api/v2';
+const SEMS_BASE = 'https://www.semsportal.com/api/v2';
 
 const BASE_TOKEN = {
-  version: '',
+  version: 'v2.1.0',
   client: 'ios',
   language: 'en',
 };
-
-function buildAuthToken(loginToken) {
-  return JSON.stringify({
-    ...BASE_TOKEN,
-    uid:       loginToken.uid       || loginToken.user?.uid || '',
-    timestamp: loginToken.timestamp || 0,
-    token:     loginToken.token     || '',
-  });
-}
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -23,34 +15,66 @@ export default async function handler(req, res) {
   const { action } = req.query;
 
   try {
+    // LOGIN - devuelve el objeto data completo para que el frontend lo almacene
     if (action === 'login') {
       const { account, pwd } = req.body;
       const response = await fetch(`${SEMS_BASE}/Common/CrossLogin`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Token: JSON.stringify(BASE_TOKEN) },
+        headers: {
+          'Content-Type': 'application/json',
+          'Token': JSON.stringify(BASE_TOKEN),
+        },
         body: JSON.stringify({ account, pwd, is_local: false }),
       });
-      const data = await response.json();
-      console.log('LOGIN:', JSON.stringify(data).substring(0, 500));
-      if (data.code !== 0) return res.status(401).json({ error: data.msg || 'Login failed', raw: data });
-      // Devolvemos el token + el stationId conocido directamente
-      return res.status(200).json({
-        ...data.data,
-        knownStationId: '8445d981-4fbe-414b-9d12-60bac0b7eeb1',
-      });
+      const raw = await response.text();
+      console.log('LOGIN RAW:', raw.substring(0, 500));
+      let data;
+      try { data = JSON.parse(raw); } catch(e) { return res.status(500).json({ error: 'Login response not JSON: ' + raw.substring(0, 200) }); }
+      if (data.code !== 0) return res.status(401).json({ error: data.msg || 'Login failed' });
+      // Devolvemos data.data completo + logueamos su estructura
+      console.log('LOGIN DATA keys:', Object.keys(data.data || {}));
+      return res.status(200).json(data.data);
     }
 
+    // MONITOR - construimos el token autenticado a partir del objeto guardado en el cliente
     if (action === 'monitor') {
       const { token, powerStationId } = req.body;
-      const authToken = buildAuthToken(token);
-      console.log('MONITOR token:', authToken.substring(0, 200));
-      const response = await fetch(`${SEMS_BASE}/PowerStation/GetMonitorDetailByPowerstationId`, {
+
+      // El token autenticado fusiona los campos base con los del login
+      // uid puede estar en token.uid o token.user.uid
+      const uid = token.uid || token.user?.uid || token.userId || '';
+      const timestamp = token.timestamp || token.expires || 0;
+      const tok = token.token || token.access_token || '';
+      const api_domain = token.api_domain || SEMS_BASE.replace('/api/v2', '');
+
+      const authToken = JSON.stringify({
+        ...BASE_TOKEN,
+        uid,
+        timestamp,
+        token: tok,
+      });
+
+      console.log('MONITOR authToken:', authToken.substring(0, 300));
+      console.log('MONITOR stationId:', powerStationId);
+
+      // Usar api_domain si viene en el login (algunas cuentas tienen dominio propio)
+      const baseUrl = token.api_domain
+        ? `${token.api_domain}/api/v2`
+        : SEMS_BASE;
+
+      const response = await fetch(`${baseUrl}/PowerStation/GetMonitorDetailByPowerstationId`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Token: authToken },
+        headers: {
+          'Content-Type': 'application/json',
+          'Token': authToken,
+        },
         body: JSON.stringify({ powerStationId }),
       });
-      const data = await response.json();
-      console.log('MONITOR:', JSON.stringify(data).substring(0, 800));
+
+      const raw = await response.text();
+      console.log('MONITOR RAW:', raw.substring(0, 600));
+      let data;
+      try { data = JSON.parse(raw); } catch(e) { return res.status(500).json({ error: 'Monitor response not JSON: ' + raw.substring(0, 200) }); }
       if (data.code !== 0) return res.status(400).json({ error: data.msg, raw: data });
       return res.status(200).json(data.data || data);
     }
