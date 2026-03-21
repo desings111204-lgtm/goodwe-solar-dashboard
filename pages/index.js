@@ -29,110 +29,269 @@ function extractFields(d) {
     batCharging:raw<0, batDischarging:raw>0, soc:parseFloat(d.soc??inv.soc??invD.soc??0) };
 }
 
-// ===== POWER SCENE con imagen real =====
-function PowerScene({ ppv, pload, pgrid, pbat, soc, batCharging, batDischarging }) {
+// ===== CABLE FLOW ANIMATION =====
+function FlowLine({ x1, y1, x2, y2, color, active, reverse, strokeWidth=2 }) {
+  if (!active) return <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="#e0e0e8" strokeWidth={strokeWidth} strokeDasharray="none"/>;
+  return (
+    <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={color} strokeWidth={strokeWidth} strokeDasharray="8 5"
+      style={{filter:`drop-shadow(0 0 2px ${color})`}}>
+      <animate attributeName="stroke-dashoffset" from={reverse?"26":"0"} to={reverse?"0":"26"} dur="1.2s" repeatCount="indefinite"/>
+    </line>
+  );
+}
+function FlowPath({ d, color, active, reverse, strokeWidth=2 }) {
+  if (!active) return <path d={d} fill="none" stroke="#e0e0e8" strokeWidth={strokeWidth}/>;
+  return (
+    <path d={d} fill="none" stroke={color} strokeWidth={strokeWidth} strokeDasharray="8 5"
+      style={{filter:`drop-shadow(0 0 2px ${color})`}}>
+      <animate attributeName="stroke-dashoffset" from={reverse?"26":"0"} to={reverse?"0":"26"} dur="1.2s" repeatCount="indefinite"/>
+    </path>
+  );
+}
+
+// ===== DATA BADGE =====
+function Badge({ x, y, value, sub, color, align='middle' }) {
+  const w = 72; const h = 34;
+  const ox = align==='middle' ? -w/2 : align==='right' ? -w : 0;
+  return (
+    <g>
+      <rect x={x+ox} y={y} width={w} height={h} rx={8} fill="white" stroke={color} strokeWidth={1.2}
+        style={{filter:'drop-shadow(0 2px 6px rgba(0,0,0,0.12)'}} />
+      <text x={x+ox+w/2} y={y+14} textAnchor="middle" fill={color} fontSize="12" fontFamily="Space Mono" fontWeight="700">{value}</text>
+      <text x={x+ox+w/2} y={y+26} textAnchor="middle" fill="#888" fontSize="8" fontFamily="Space Mono">{sub}</text>
+    </g>
+  );
+}
+
+// ===== MAIN SCENE =====
+function GoodWeScene({ ppv, pload, pgrid, pbat, soc, batCharging, batDischarging }) {
   const importing = pgrid > 0;
   const exporting = pgrid < 0;
   const hasSolar = ppv > 0;
   const hasBat = Math.abs(pbat) > 2;
+  const hasLoad = pload > 0;
+
+  // Colors matching the render image cables
+  const cGrid = importing ? '#ef4444' : '#22c55e';
+  const cSolar = '#3b82f6';
+  const cBat = batCharging ? '#3b82f6' : '#a855f7';
+  const cLoad = '#22c55e';
 
   return (
-    <div style={{position:'relative',borderRadius:18,overflow:'hidden',background:'#070714'}}>
-      {/* Imagen de fondo: casa solar render */}
-      <img
-        src="https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=800&q=80"
-        alt="Solar house"
-        style={{width:'100%',height:260,objectFit:'cover',objectPosition:'center',opacity:0.45,display:'block'}}
-      />
+    <div style={{background:'linear-gradient(180deg,#dce8f5 0%,#eef3f8 40%,#f5f5f0 100%)',borderRadius:16,overflow:'hidden'}}>
+      <svg viewBox="0 0 420 480" width="100%" style={{display:'block'}}>
+        <defs>
+          {/* Sky gradient */}
+          <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#c8dff5"/>
+            <stop offset="100%" stopColor="#e8f0f8"/>
+          </linearGradient>
+          {/* Ground */}
+          <linearGradient id="ground" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#e8e8e0"/>
+            <stop offset="100%" stopColor="#d8d8d0"/>
+          </linearGradient>
+          {/* Panel blue */}
+          <linearGradient id="panelGrad" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="#7bb8e8"/>
+            <stop offset="100%" stopColor="#4a9fd4"/>
+          </linearGradient>
+          {/* Window glow */}
+          <radialGradient id="winGlow" cx="50%" cy="50%" r="60%">
+            <stop offset="0%" stopColor="#fde68a" stopOpacity="0.9"/>
+            <stop offset="100%" stopColor="#f59e0b" stopOpacity="0.3"/>
+          </radialGradient>
+          {/* GoodWe inverter gradient */}
+          <linearGradient id="invGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#f8f8f8"/>
+            <stop offset="100%" stopColor="#e8e8e8"/>
+          </linearGradient>
+          {/* Battery gradient */}
+          <linearGradient id="batGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#f2f2f2"/>
+            <stop offset="100%" stopColor="#e2e2e2"/>
+          </linearGradient>
+        </defs>
 
-      {/* Overlay oscuro gradiente */}
-      <div style={{position:'absolute',inset:0,background:'linear-gradient(to bottom,rgba(3,3,20,0.3) 0%,rgba(3,3,20,0.75) 100%)'}} />
+        {/* Sky */}
+        <rect x="0" y="0" width="420" height="280" fill="url(#sky)"/>
+        {/* Ground */}
+        <rect x="0" y="280" width="420" height="200" fill="url(#ground)"/>
+        {/* Ground shadow under house */}
+        <ellipse cx="230" cy="295" rx="140" ry="12" fill="rgba(0,0,0,0.08)"/>
 
-      {/* ===== Dato FV arriba centro ===== */}
-      <div style={{position:'absolute',top:14,left:'50%',transform:'translateX(-50%)',textAlign:'center'}}>
-        <div style={{display:'inline-flex',flexDirection:'column',alignItems:'center',background:'rgba(0,0,0,0.5)',backdropFilter:'blur(8px)',border:`1px solid ${hasSolar?'rgba(96,165,250,0.5)':'rgba(80,80,120,0.3)'}`,borderRadius:50,padding:'10px 22px'}}>
-          <span style={{fontFamily:'Space Mono',fontSize:20,fontWeight:700,color:hasSolar?'#60a5fa':'#444',textShadow:hasSolar?'0 0 12px rgba(96,165,250,0.6)':'none'}}>{fW(ppv)}</span>
-          <span style={{fontFamily:'Space Mono',fontSize:9,color:hasSolar?'rgba(96,165,250,0.7)':'#333',marginTop:2}}>FV {hasSolar?'→':''}</span>
-        </div>
-        {/* Flecha animada hacia abajo */}
+        {/* ===== UTILITY POLE (left) ===== */}
+        {/* Main pole */}
+        <rect x="62" y="80" width="8" height="200" rx="2" fill="#9ca3af"/>
+        {/* Cross arm */}
+        <rect x="38" y="88" width="56" height="7" rx="2" fill="#6b7280"/>
+        {/* Insulators */}
+        <circle cx="42" cy="91" r="4" fill="#9ca3af" stroke="#6b7280" strokeWidth="0.5"/>
+        <circle cx="90" cy="91" r="4" fill="#9ca3af" stroke="#6b7280" strokeWidth="0.5"/>
+        {/* Pole base */}
+        <rect x="60" y="278" width="12" height="10" rx="1" fill="#6b7280"/>
+        {/* Meter box on pole */}
+        <rect x="46" y="155" width="30" height="38" rx="3" fill="#f3f4f6" stroke="#d1d5db" strokeWidth="1"/>
+        <rect x="49" y="158" width="24" height="28" rx="2" fill="#e5e7eb"/>
+        <circle cx="61" cy="172" r="5" fill="#f9fafb" stroke="#9ca3af" strokeWidth="1"/>
+        <circle cx="61" cy="172" r="2" fill={importing?'#ef4444':'#22c55e'}/>
+        <text x="61" y="190" textAnchor="middle" fill="#6b7280" fontSize="5" fontFamily="Space Mono">METER</text>
+
+        {/* ===== HOUSE ===== */}
+        {/* House body */}
+        <rect x="105" y="175" width="220" height="115" rx="3" fill="#f8f8f6" stroke="#e8e8e0" strokeWidth="1"/>
+        {/* Roof */}
+        <polygon points="98,178 215,95 322,178" fill="#f0f0ec" stroke="#ddd" strokeWidth="1"/>
+        {/* Roof inner shading */}
+        <polygon points="100,177 215,97 320,177" fill="rgba(255,255,255,0.4)"/>
+        {/* Chimney */}
+        <rect x="258" y="112" width="18" height="32" fill="#eee" stroke="#ddd" strokeWidth="0.8"/>
+        {/* Door */}
+        <rect x="190" y="255" width="30" height="35" rx="2" fill="#e8e8e0" stroke="#ccc" strokeWidth="1"/>
+        <circle cx="217" cy="274" r="2.5" fill="#9ca3af"/>
+        {/* Front step */}
+        <rect x="185" y="289" width="40" height="4" rx="1" fill="#e0e0d8"/>
+
+        {/* WINDOW with warm light */}
+        <rect x="283" y="205" width="38" height="32" rx="3" fill="url(#winGlow)" stroke="rgba(251,191,36,0.4)" strokeWidth="1"/>
+        {/* Window frame cross */}
+        <line x1="302" y1="205" x2="302" y2="237" stroke="rgba(255,255,255,0.6)" strokeWidth="1"/>
+        <line x1="283" y1="221" x2="321" y2="221" stroke="rgba(255,255,255,0.6)" strokeWidth="1"/>
+        {/* Window glow halo */}
+        <ellipse cx="302" cy="221" rx="28" ry="22" fill="rgba(253,230,138,0.12)"/>
+        {/* Lamp silhouette in window */}
+        <circle cx="302" cy="213" r="4" fill="rgba(253,230,138,0.8)"/>
+        <rect x="301" y="217" width="2" height="5" fill="rgba(200,160,80,0.6)"/>
+
+        {/* Small left window */}
+        <rect x="115" y="208" width="36" height="26" rx="2" fill="#dce8f5" stroke="#ccc" strokeWidth="0.8"/>
+        <line x1="133" y1="208" x2="133" y2="234" stroke="#ccc" strokeWidth="0.8"/>
+        <line x1="115" y1="221" x2="151" y2="221" stroke="#ccc" strokeWidth="0.8"/>
+
+        {/* ===== SOLAR PANELS on roof ===== */}
+        {/* Panels angled with roof - 3x2 grid */}
+        <g transform="translate(152,116) rotate(-26)">
+          {/* Row 1 */}
+          {[0,26,52].map(ox => (
+            <g key={ox}>
+              <rect x={ox} y={0} width={22} height={15} rx="1" fill={hasSolar?'url(#panelGrad)':'#b8c8d8'} stroke="#6899b8" strokeWidth="0.8"/>
+              <line x1={ox+7} y1={0} x2={ox+7} y2={15} stroke="rgba(255,255,255,0.3)" strokeWidth="0.4"/>
+              <line x1={ox+14} y1={0} x2={ox+14} y2={15} stroke="rgba(255,255,255,0.3)" strokeWidth="0.4"/>
+              <line x1={ox} y1={5} x2={ox+22} y2={5} stroke="rgba(255,255,255,0.3)" strokeWidth="0.4"/>
+              <line x1={ox} y1={10} x2={ox+22} y2={10} stroke="rgba(255,255,255,0.3)" strokeWidth="0.4"/>
+            </g>
+          ))}
+          {/* Row 2 */}
+          {[0,26,52].map(ox => (
+            <g key={`r2-${ox}`}>
+              <rect x={ox} y={17} width={22} height={15} rx="1" fill={hasSolar?'url(#panelGrad)':'#b8c8d8'} stroke="#6899b8" strokeWidth="0.8"/>
+              <line x1={ox+7} y1={17} x2={ox+7} y2={32} stroke="rgba(255,255,255,0.3)" strokeWidth="0.4"/>
+              <line x1={ox+14} y1={17} x2={ox+14} y2={32} stroke="rgba(255,255,255,0.3)" strokeWidth="0.4"/>
+              <line x1={ox} y1={22} x2={ox+22} y2={22} stroke="rgba(255,255,255,0.3)" strokeWidth="0.4"/>
+              <line x1={ox} y1={27} x2={ox+22} y2={27} stroke="rgba(255,255,255,0.3)" strokeWidth="0.4"/>
+            </g>
+          ))}
+        </g>
+
+        {/* ===== 2 INVERTERS (center of house wall) ===== */}
+        {/* Inverter 1 */}
+        <rect x="152" y="197" width="44" height="56" rx="5" fill="url(#invGrad)" stroke="#d1d5db" strokeWidth="1"/>
+        <rect x="155" y="200" width="38" height="46" rx="3" fill="rgba(255,255,255,0.6)"/>
+        {/* GoodWe logo text */}
+        <text x="174" y="214" textAnchor="middle" fill="#374151" fontSize="5.5" fontFamily="sans-serif" fontWeight="600">GoodWe</text>
+        <text x="174" y="221" textAnchor="middle" fill="#6b7280" fontSize="4" fontFamily="monospace">®</text>
+        {/* Status LED */}
+        <circle cx="174" cy="230" r="3.5" fill="none" stroke="#d1d5db" strokeWidth="0.8"/>
+        <circle cx="174" cy="230" r="2" fill={hasSolar||hasBat?'#22c55e':'#9ca3af'}/>
+        {/* Connectors bottom */}
+        <rect x="158" y="244" width="6" height="4" rx="1" fill="#3b82f6"/>
+        <rect x="166" y="244" width="6" height="4" rx="1" fill="#ef4444"/>
+        <rect x="174" y="244" width="6" height="4" rx="1" fill="#eab308"/>
+        <rect x="182" y="244" width="6" height="4" rx="1" fill="#22c55e"/>
+        <text x="174" y="257" textAnchor="middle" fill="#9ca3af" fontSize="5" fontFamily="monospace">INV 1</text>
+
+        {/* Inverter 2 */}
+        <rect x="202" y="197" width="44" height="56" rx="5" fill="url(#invGrad)" stroke="#d1d5db" strokeWidth="1"/>
+        <rect x="205" y="200" width="38" height="46" rx="3" fill="rgba(255,255,255,0.6)"/>
+        <text x="224" y="214" textAnchor="middle" fill="#374151" fontSize="5.5" fontFamily="sans-serif" fontWeight="600">GoodWe</text>
+        <text x="224" y="221" textAnchor="middle" fill="#6b7280" fontSize="4" fontFamily="monospace">®</text>
+        <circle cx="224" cy="230" r="3.5" fill="none" stroke="#d1d5db" strokeWidth="0.8"/>
+        <circle cx="224" cy="230" r="2" fill={hasSolar||hasBat?'#22c55e':'#9ca3af'}/>
+        <rect x="208" y="244" width="6" height="4" rx="1" fill="#3b82f6"/>
+        <rect x="216" y="244" width="6" height="4" rx="1" fill="#ef4444"/>
+        <rect x="224" y="244" width="6" height="4" rx="1" fill="#eab308"/>
+        <rect x="232" y="244" width="6" height="4" rx="1" fill="#22c55e"/>
+        <text x="224" y="257" textAnchor="middle" fill="#9ca3af" fontSize="5" fontFamily="monospace">INV 2</text>
+
+        {/* ===== BATTERY (bottom center) ===== */}
+        <rect x="148" y="335" width="124" height="52" rx="6" fill="url(#batGrad)" stroke="#d1d5db" strokeWidth="1"
+          style={{filter:'drop-shadow(0 3px 8px rgba(0,0,0,0.1))'}} />
+        <rect x="153" y="339" width="114" height="40" rx="4" fill="rgba(255,255,255,0.5)"/>
+        {/* Battery level bar */}
+        <rect x="157" y="343" width="100" height="14" rx="3" fill="#f3f4f6" stroke="#e5e7eb" strokeWidth="0.8"/>
+        {soc > 0 && (
+          <rect x="158" y="344" width={Math.max(2, soc*0.98)} height="12" rx="2"
+            fill={soc>50?(batCharging?'#3b82f6':'#22c55e'):soc>20?'#eab308':'#ef4444'}/>
+        )}
+        {/* Battery label */}
+        <text x="210" y="369" textAnchor="middle" fill="#374151" fontSize="7" fontFamily="sans-serif" fontWeight="600">GOODWE LYNX LXD5</text>
+        {/* Blinking LED */}
+        <circle cx="255" cy="352" r="3" fill={hasBat?(batCharging?'#3b82f6':'#22c55e'):'#9ca3af'}/>
+        <text x="172" y="385" textAnchor="middle" fill="#6b7280" fontSize="6" fontFamily="monospace">BATTERY</text>
+
+        {/* ===== CABLES (colored, matching render) ===== */}
+        {/* Grid (pole meter) -> Inverter 1: red cable */}
+        <FlowPath d="M76,175 L76,253 Q76,258 81,258 L152,258" color={importing?'#ef4444':'#22c55e'} active={pgrid!==0} reverse={exporting} strokeWidth={2}/>
+        {/* Solar (roof panels) -> Inverters: blue cable */}
+        <FlowPath d="M195,165 L195,197" color="#3b82f6" active={hasSolar} strokeWidth={2}/>
+        {/* Inverter -> Battery: yellow cable */}
+        <FlowPath d="M174,253 L174,290 Q174,295 174,300 L174,335" color={batCharging?'#3b82f6':'#eab308'} active={hasBat} reverse={!batCharging} strokeWidth={2}/>
+        {/* Inverter 2 -> Battery: green cable */}
+        <FlowPath d="M224,253 L224,290 Q224,295 210,300 L210,335" color="#22c55e" active={hasBat} reverse={!batCharging} strokeWidth={2}/>
+        {/* Inverter -> House load: blue cable right side */}
+        <FlowPath d="M246,225 L280,225" color="#3b82f6" active={hasLoad} strokeWidth={2}/>
+
+        {/* ===== POWER FLOW DATA BADGES ===== */}
+
+        {/* SOLAR - circle badge at top (like GoodWe app) */}
+        <circle cx="215" cy="68" r="30" fill="white" stroke={hasSolar?'#22c55e':'#e5e7eb'} strokeWidth="2"
+          style={{filter:'drop-shadow(0 2px 8px rgba(0,0,0,0.12))'}} />
+        {hasSolar && <circle cx="215" cy="68" r="27" fill="none" stroke="#22c55e" strokeWidth="1.5" strokeDasharray="none" strokeOpacity="0.3"/>}
+        <text x="215" y="63" textAnchor="middle" fill={hasSolar?'#16a34a':'#9ca3af'} fontSize="11" fontFamily="Space Mono" fontWeight="700">{fW(ppv)}</text>
+        <text x="215" y="76" textAnchor="middle" fill={hasSolar?'#22c55e':'#9ca3af'} fontSize="7" fontFamily="Space Mono">FV &gt;</text>
+        {/* Arrow from solar circle to roof */}
         {hasSolar && (
-          <div style={{display:'flex',justifyContent:'center',marginTop:4}}>
-            <div style={{width:2,height:20,background:'linear-gradient(to bottom,rgba(96,165,250,0.8),transparent)',animation:'fadeDown 1s infinite'}} />
-          </div>
-        )}
-      </div>
-
-      {/* ===== Nodos inferiores: Batería | Red | Carga ===== */}
-      <div style={{position:'absolute',bottom:0,left:0,right:0,display:'flex',justifyContent:'space-between',alignItems:'flex-end',padding:'0 12px 14px'}}>
-
-        {/* Batería */}
-        <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:4}}>
-          <div style={{background:'rgba(0,0,0,0.55)',backdropFilter:'blur(8px)',border:`1px solid ${batCharging?'rgba(96,165,250,0.5)':batDischarging?'rgba(167,139,250,0.5)':'rgba(80,80,120,0.25)'}`,borderRadius:12,padding:'8px 12px',textAlign:'center',minWidth:80}}>
-            {/* Battery bar visual */}
-            <div style={{width:32,height:14,border:'1.5px solid #555',borderRadius:3,margin:'0 auto 6px',position:'relative'}}>
-              <div style={{width:4,height:6,background:'#555',borderRadius:'0 2px 2px 0',position:'absolute',right:-5,top:'50%',transform:'translateY(-50%)'}}/>
-              <div style={{position:'absolute',left:1,top:1,bottom:1,width:`${Math.max(0,Math.min(soc||0,100))*0.88}%`,
-                background:soc>50?(batCharging?'#60a5fa':'#34d399'):soc>20?'#fbbf24':'#f87171',
-                borderRadius:2,transition:'width 0.5s'}} />
-            </div>
-            <div style={{fontFamily:'Space Mono',fontSize:13,fontWeight:700,color:batCharging?'#60a5fa':batDischarging?'#a78bfa':'#888'}}>{soc>0?`${soc}%`:'—'}</div>
-            <div style={{fontFamily:'Space Mono',fontSize:8,color:'rgba(255,255,255,0.25)',marginTop:1}}>{batCharging?`↓ ${fW(pbat)}`:batDischarging?`↑ ${fW(pbat)}`:'Reposo'}</div>
-          </div>
-          <div style={{fontFamily:'Space Mono',fontSize:8,color:'#333'}}>BATERÍA</div>
-        </div>
-
-        {/* Red */}
-        <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:4}}>
-          <div style={{background:'rgba(0,0,0,0.55)',backdropFilter:'blur(8px)',border:`1px solid ${importing?'rgba(248,113,113,0.4)':exporting?'rgba(52,211,153,0.4)':'rgba(80,80,120,0.25)'}`,borderRadius:12,padding:'8px 12px',textAlign:'center',minWidth:80}}>
-            <div style={{fontFamily:'Space Mono',fontSize:13,fontWeight:700,color:importing?'#f87171':exporting?'#34d399':'#555'}}>{fW(pgrid)}</div>
-            <div style={{fontFamily:'Space Mono',fontSize:8,color:'rgba(255,255,255,0.25)',marginTop:2}}>{importing?'↓ Red':exporting?'↑ Red':'Neutro'}</div>
-          </div>
-          <div style={{fontFamily:'Space Mono',fontSize:8,color:'#333'}}>RED</div>
-        </div>
-
-        {/* Carga */}
-        <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:4}}>
-          <div style={{background:'rgba(0,0,0,0.55)',backdropFilter:'blur(8px)',border:'1px solid rgba(129,140,248,0.35)',borderRadius:12,padding:'8px 12px',textAlign:'center',minWidth:80}}>
-            <div style={{fontFamily:'Space Mono',fontSize:13,fontWeight:700,color:'#818cf8'}}>{fW(pload)}</div>
-            <div style={{fontFamily:'Space Mono',fontSize:8,color:'rgba(255,255,255,0.25)',marginTop:2}}>Consumo</div>
-          </div>
-          <div style={{fontFamily:'Space Mono',fontSize:8,color:'#333'}}>CARGA</div>
-        </div>
-      </div>
-
-      {/* Flujos animados SVG superpuesto */}
-      <svg style={{position:'absolute',inset:0,width:'100%',height:'100%',pointerEvents:'none'}} viewBox="0 0 360 260" preserveAspectRatio="none">
-        {/* Solar → Centro */}
-        {hasSolar && (
-          <line x1="180" y1="65" x2="180" y2="180" stroke="rgba(96,165,250,0.5)" strokeWidth="1.5" strokeDasharray="6 4">
-            <animate attributeName="stroke-dashoffset" from="0" to="20" dur="1s" repeatCount="indefinite"/>
+          <line x1="215" y1="98" x2="215" y2="115" stroke="#22c55e" strokeWidth="1.5" strokeDasharray="4 3">
+            <animate attributeName="stroke-dashoffset" from="0" to="14" dur="0.8s" repeatCount="indefinite"/>
           </line>
         )}
-        {/* Bat ↔ Centro */}
-        {hasBat && (
-          <line x1="60" y1="220" x2="150" y2="190" stroke={batCharging?'rgba(96,165,250,0.5)':'rgba(167,139,250,0.5)'} strokeWidth="1.5" strokeDasharray="5 4">
-            <animate attributeName="stroke-dashoffset" from={batCharging?"0":"18"} to={batCharging?"18":"0"} dur="1s" repeatCount="indefinite"/>
-          </line>
-        )}
-        {/* Grid ↔ Centro */}
-        {pgrid !== 0 && (
-          <line x1="180" y1="220" x2="180" y2="190" stroke={importing?'rgba(248,113,113,0.5)':'rgba(52,211,153,0.5)'} strokeWidth="1.5" strokeDasharray="5 4">
-            <animate attributeName="stroke-dashoffset" from={importing?"0":"18"} to={importing?"18":"0"} dur="1s" repeatCount="indefinite"/>
-          </line>
-        )}
-        {/* Carga ← Centro */}
-        {pload > 0 && (
-          <line x1="210" y1="190" x2="300" y2="220" stroke="rgba(129,140,248,0.4)" strokeWidth="1.5" strokeDasharray="5 4">
-            <animate attributeName="stroke-dashoffset" from="0" to="18" dur="1.2s" repeatCount="indefinite"/>
-          </line>
-        )}
+
+        {/* GRID - left badge near meter */}
+        <g transform="translate(8,140)">
+          <rect x="0" y="0" width="64" height="36" rx="7" fill="white" stroke={pgrid!==0?(importing?'#ef4444':'#22c55e'):'#e5e7eb'} strokeWidth="1.2"
+            style={{filter:'drop-shadow(0 1px 4px rgba(0,0,0,0.1))'}} />
+          <text x="32" y="14" textAnchor="middle" fill={importing?'#ef4444':exporting?'#16a34a':'#9ca3af'} fontSize="10" fontFamily="Space Mono" fontWeight="700">{fW(pgrid)}</text>
+          <text x="32" y="27" textAnchor="middle" fill="#9ca3af" fontSize="7" fontFamily="Space Mono">{importing?'Red ↓':exporting?'Red ↑':'Red'}</text>
+        </g>
+
+        {/* BATTERY - badge below battery unit */}
+        <g transform="translate(148,394)">
+          <rect x="0" y="0" width="124" height="36" rx="7" fill="white" stroke={hasBat?(batCharging?'#3b82f6':'#a855f7'):'#e5e7eb'} strokeWidth="1.2"
+            style={{filter:'drop-shadow(0 1px 4px rgba(0,0,0,0.1))'}} />
+          <text x="62" y="14" textAnchor="middle" fill={batCharging?'#2563eb':batDischarging?'#9333ea':'#9ca3af'} fontSize="10" fontFamily="Space Mono" fontWeight="700">
+            {soc>0?`${soc}%`:'—'} {hasBat?fW(pbat):''}
+          </text>
+          <text x="62" y="27" textAnchor="middle" fill="#9ca3af" fontSize="7" fontFamily="Space Mono">{batCharging?'Batería ↓ Cargando':batDischarging?'Batería ↑ Descargando':'Batería • Reposo'}</text>
+        </g>
+
+        {/* LOAD - right badge near window */}
+        <g transform="translate(327,207)">
+          <rect x="0" y="0" width="72" height="36" rx="7" fill="white" stroke={hasLoad?'#818cf8':'#e5e7eb'} strokeWidth="1.2"
+            style={{filter:'drop-shadow(0 1px 4px rgba(0,0,0,0.1))'}} />
+          <text x="36" y="14" textAnchor="middle" fill={hasLoad?'#4f46e5':'#9ca3af'} fontSize="10" fontFamily="Space Mono" fontWeight="700">{fW(pload)}</text>
+          <text x="36" y="27" textAnchor="middle" fill="#9ca3af" fontSize="7" fontFamily="Space Mono">Consumo</text>
+        </g>
       </svg>
-
-      <style>{`
-        @keyframes fadeDown {
-          0%{opacity:1;transform:scaleY(1)} 50%{opacity:0.4} 100%{opacity:1;transform:scaleY(1)}
-        }
-      `}</style>
     </div>
   );
 }
@@ -156,7 +315,6 @@ function Donut({ pct, color, label, value }) {
   );
 }
 
-// ===== LINE CHART =====
 function LineChart({ points, color }) {
   if (!points||points.length<2) return <div style={{height:90,display:'flex',alignItems:'center',justifyContent:'center',color:'#222',fontFamily:'Space Mono',fontSize:10}}>Sin datos</div>;
   const vals=points.map(p=>p.v);
@@ -198,7 +356,6 @@ export default function Dashboard() {
   const [acc,setAcc]=useState({imp:0,exp:0,self:0});
   const lastRef=useRef(null);
   const intRef=useRef(null);
-  // Guardamos token en ref para acceder en callbacks sin dependencias
   const tokenRef=useRef(null);
   useEffect(()=>{tokenRef.current=token;},[token]);
 
@@ -242,63 +399,30 @@ export default function Dashboard() {
     }catch(e){setMonErr(e.message);}
   },[]);
 
-  // fetchHistory usa tokenRef para evitar stale closures
   const fetchHistory=useCallback(async(p,d)=>{
     const tk=tokenRef.current;
-    if(!tk){console.log('No token yet');return;}
+    if(!tk) return;
     setHistLoading(true);setChartPts([]);
     try{
       const today=new Date();
       const ds=d||today.toISOString().split('T')[0];
       let endpoint,body;
-      if(p==='day'){
-        endpoint='/PowerStation/GetPowerStationPowerChart';
-        body={powerStationId:STATION_ID,date:ds};
-      }else if(p==='week'){
-        const mon=new Date(today);
-        mon.setDate(today.getDate()-((today.getDay()+6)%7));
-        endpoint='/PowerStation/GetPowerStationChart';
-        body={powerStationId:STATION_ID,date:mon.toISOString().split('T')[0],chartType:2};
-      }else if(p==='month'){
-        endpoint='/PowerStation/GetPowerStationChart';
-        body={powerStationId:STATION_ID,date:`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-01`,chartType:3};
-      }else{
-        endpoint='/PowerStation/GetPowerStationChart';
-        body={powerStationId:STATION_ID,date:`${today.getFullYear()}-01-01`,chartType:4};
-      }
-      console.log('Fetching history:',endpoint,body);
-      const r=await fetch(`${SEMS}${endpoint}`,{
-        method:'POST',
-        headers:{'Content-Type':'application/json','Token':JSON.stringify(tk)},
-        body:JSON.stringify(body)
-      });
+      if(p==='day'){endpoint='/PowerStation/GetPowerStationPowerChart';body={powerStationId:STATION_ID,date:ds};}
+      else if(p==='week'){const mon=new Date(today);mon.setDate(today.getDate()-((today.getDay()+6)%7));endpoint='/PowerStation/GetPowerStationChart';body={powerStationId:STATION_ID,date:mon.toISOString().split('T')[0],chartType:2};}
+      else if(p==='month'){endpoint='/PowerStation/GetPowerStationChart';body={powerStationId:STATION_ID,date:`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-01`,chartType:3};}
+      else{endpoint='/PowerStation/GetPowerStationChart';body={powerStationId:STATION_ID,date:`${today.getFullYear()}-01-01`,chartType:4};}
+      const r=await fetch(`${SEMS}${endpoint}`,{method:'POST',headers:{'Content-Type':'application/json','Token':JSON.stringify(tk)},body:JSON.stringify(body)});
       const raw=await r.text();
-      console.log('History raw (200 chars):',raw.substring(0,200));
-      let res;try{res=JSON.parse(raw);}catch(e){console.log('History parse error');return;}
-      console.log('History code:',res.code,'keys:',Object.keys(res.data||{}));
-      if(parseInt(res.code)!==0){console.log('History error:',res.msg);return;}
+      let res;try{res=JSON.parse(raw);}catch(e){return;}
+      if(parseInt(res.code)!==0) return;
       const data=res.data;
-      // Buscar array de puntos en todas las posibles rutas de la API SEMS
-      const arr=
-        data?.lines?.[0]?.xy ||
-        data?.lines?.[1]?.xy ||
-        data?.power ||
-        data?.pac ||
-        data?.list ||
-        data?.datas ||
-        (Array.isArray(data)?data:null) ||
-        (data&&Object.values(data).find(v=>Array.isArray(v)&&v.length>0));
-      console.log('History array found:',Array.isArray(arr)?arr.length:'no');
+      const arr=data?.lines?.[0]?.xy||data?.power||data?.pac||data?.list||data?.datas||(Array.isArray(data)?data:null)||(data&&Object.values(data).find(v=>Array.isArray(v)&&v.length>0));
       if(Array.isArray(arr)&&arr.length>0){
-        setChartPts(arr.map((pt,i)=>({
-          t:pt.x||pt.time||pt.date||i,
-          v:Math.max(0,parseFloat(pt.y??pt.value??pt.power??pt.pac??pt.e??0))
-        })).filter(p=>!isNaN(p.v)));
+        setChartPts(arr.map((pt,i)=>({t:pt.x||pt.time||i,v:Math.max(0,parseFloat(pt.y??pt.value??pt.power??pt.pac??pt.e??0))})).filter(p=>!isNaN(p.v)));
       }
-    }catch(e){console.log('History fetch error:',e);}finally{setHistLoading(false);}
+    }catch(e){console.log('History err:',e);}finally{setHistLoading(false);}
   },[]);
 
-  // Arrancar live al entrar al dashboard
   useEffect(()=>{
     if(step==='dashboard'){
       fetchLive();
@@ -308,7 +432,6 @@ export default function Dashboard() {
     return()=>clearInterval(intRef.current);
   },[step]);
 
-  // Refetch history cuando cambian filtros (con pequeño delay para que token esté en ref)
   useEffect(()=>{
     if(step!=='dashboard') return;
     const t=setTimeout(()=>fetchHistory(period,date),100);
@@ -321,10 +444,7 @@ export default function Dashboard() {
   const gi=acc.imp*tarifa;
   const neto=ie+aa-gi;
 
-  const xLabels=period==='day'?['00','04','08','12','16','20']:
-    period==='week'?['L','M','X','J','V','S','D']:
-    period==='month'?['1','5','10','15','20','25','30']:
-    ['E','F','M','A','M','J','J','A','S','O','N','D'];
+  const xLabels=period==='day'?['00','04','08','12','16','20']:period==='week'?['L','M','X','J','V','S','D']:period==='month'?['1','5','10','15','20','25','30']:['E','F','M','A','M','J','J','A','S','O','N','D'];
 
   return(
     <>
@@ -363,7 +483,6 @@ export default function Dashboard() {
             </div>
           </header>
 
-          {/* KPI strip */}
           {kpi&&(
             <div className="kstrip">
               <div className="ks"><div className="ksv yellow">{kpi.power??0}<span className="ksu">kWh</span></div><div className="ksl">Hoy</div></div>
@@ -384,34 +503,21 @@ export default function Dashboard() {
 
           {monErr&&<div className="merr">{monErr}</div>}
 
-          {/* LIVE */}
           {tab==='live'&&(
             <div className="tc">
               <div className="sec">
                 <div className="sl">FLUJO EN VIVO</div>
-                {live?<PowerScene {...live}/>:<div className="ldtxt">Conectando...</div>}
+                {live?<GoodWeScene {...live}/>:<div className="ldtxt">Conectando...</div>}
               </div>
-              {live&&(
-                <div className="sec">
-                  <div className="sl">VALORES ACTUALES</div>
-                  <div className="g2">
-                    <div className="sc solar"><div className="sci">☀️</div><div className="scv">{fW(live.ppv)}</div><div className="scl">Solar FV</div><div className="scs">{live.ppv>0?'Generando':'Sin sol'}</div></div>
-                    <div className={`sc ${live.pgrid>0?'imp':live.pgrid<0?'exp':'neut'}`}><div className="sci">{live.pgrid>0?'⬇️':live.pgrid<0?'⬆️':'↔️'}</div><div className="scv">{fW(live.pgrid)}</div><div className="scl">Red</div><div className="scs">{live.pgrid>0?'Importando':live.pgrid<0?'Exportando':'Neutro'}</div></div>
-                    <div className="sc load"><div className="sci">🏠</div><div className="scv">{fW(live.pload)}</div><div className="scl">Consumo</div><div className="scs">Casa</div></div>
-                    <div className={`sc ${live.batCharging?'batc':live.batDischarging?'batd':'neut'}`}><div className="sci">🔋</div><div className="scv">{live.soc>0?`${live.soc}%`:'—'}</div><div className="scl">Batería LXD5</div><div className="scs">{live.batCharging?`Cargando ${fW(live.pbat)}`:live.batDischarging?`Descargando ${fW(live.pbat)}`:'Reposo'}</div></div>
-                  </div>
-                </div>
-              )}
             </div>
           )}
 
-          {/* HISTORY */}
           {tab==='history'&&(
             <div className="tc">
               <div className="sec">
                 <div className="prow">
                   {[['day','Hoy'],['week','Semana'],['month','Mes'],['year','Año']].map(([k,l])=>(
-                    <button key={k} className={`pb ${period===k?'on':''}`} onClick={()=>{setPeriod(k);}}>{l}</button>
+                    <button key={k} className={`pb ${period===k?'on':''}`} onClick={()=>setPeriod(k)}>{l}</button>
                   ))}
                 </div>
                 <div className="drow">
@@ -432,12 +538,8 @@ export default function Dashboard() {
               <div className="sec">
                 <div className="sl">CURVA — {period==='day'?'HOY':period==='week'?'SEMANA':period==='month'?'MES':'AÑO'}</div>
                 <div className="chartc">
-                  {histLoading?(
-                    <div className="ldtxt">Cargando datos...</div>
-                  ):chartPts.length>1?(
-                    <><LineChart points={chartPts} color="#fbbf24"/>
-                      <div className="xlabs">{xLabels.map((l,i)=><span key={i} className="xl">{l}</span>)}</div>
-                    </>
+                  {histLoading?<div className="ldtxt">Cargando...</div>:chartPts.length>1?(
+                    <><LineChart points={chartPts} color="#fbbf24"/><div className="xlabs">{xLabels.map((l,i)=><span key={i} className="xl">{l}</span>)}</div></>
                   ):(
                     <div style={{textAlign:'center',padding:'28px 0',color:'#333',fontSize:12}}>
                       <div style={{fontSize:26,marginBottom:6}}>📊</div>
@@ -471,7 +573,6 @@ export default function Dashboard() {
             </div>
           )}
 
-          {/* BALANCE */}
           {tab==='balance'&&(
             <div className="tc">
               <div className="sec">
@@ -558,25 +659,6 @@ export default function Dashboard() {
         .sec{padding:14px 12px 0}
         .sl{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:2.5px;color:#1e1e2e;margin-bottom:10px}
         .ldtxt{text-align:center;padding:30px;color:#2a2a3a;font-family:'Space Mono',monospace;font-size:11px}
-        .g2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-        .sc{background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.05);border-radius:14px;padding:13px;position:relative;overflow:hidden}
-        .sc::after{content:'';position:absolute;top:0;left:0;right:0;height:1.5px;border-radius:14px 14px 0 0}
-        .sc.solar::after{background:linear-gradient(90deg,#60a5fa,transparent)}
-        .sc.load::after{background:linear-gradient(90deg,#818cf8,transparent)}
-        .sc.imp::after{background:linear-gradient(90deg,#f87171,transparent)}
-        .sc.exp::after{background:linear-gradient(90deg,#34d399,transparent)}
-        .sc.batc::after{background:linear-gradient(90deg,#60a5fa,transparent)}
-        .sc.batd::after{background:linear-gradient(90deg,#a78bfa,transparent)}
-        .sci{font-size:18px;margin-bottom:5px}
-        .scv{font-family:'Space Mono',monospace;font-size:16px;font-weight:700;margin-bottom:2px}
-        .sc.solar .scv{color:#60a5fa}
-        .sc.load .scv{color:#818cf8}
-        .sc.imp .scv{color:#f87171}
-        .sc.exp .scv{color:#34d399}
-        .sc.batc .scv{color:#60a5fa}
-        .sc.batd .scv{color:#a78bfa}
-        .scl{font-size:11px;font-weight:600;color:#555}
-        .scs{font-size:9px;color:#2a2a3a;font-family:'Space Mono',monospace;margin-top:2px}
         .prow{display:flex;gap:6px;margin-bottom:10px}
         .pb{flex:1;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.05);border-radius:10px;padding:9px 4px;font-size:11px;font-weight:600;font-family:'Outfit',sans-serif;color:#3a3a4a;cursor:pointer;transition:all .2s}
         .pb.on{background:rgba(251,191,36,.07);border-color:rgba(251,191,36,.2);color:#fbbf24}
