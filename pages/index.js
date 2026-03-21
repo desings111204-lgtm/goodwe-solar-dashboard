@@ -12,9 +12,39 @@ function getTarifaImportacion() {
   return h >= 8 ? TARIFA_IMPORTACION_PUNTA : TARIFA_IMPORTACION_VALLE;
 }
 function formatW(w) {
-  if (w == null) return '—';
+  if (w == null || isNaN(w)) return '—';
   if (Math.abs(w) >= 1000) return `${(w/1000).toFixed(2)} kW`;
   return `${Math.round(w)} W`;
+}
+
+// Extrae todos los campos posibles de la respuesta SEMS
+function extractFields(d) {
+  if (!d) return { ppv:0, pload:0, pgrid:0, pbat:0, soc:0 };
+
+  // Estructura powerflow (inversor con bateria)
+  const pf = d.powerflow;
+  if (pf) {
+    return {
+      ppv:   parseFloat(pf.pv   ?? pf.ppv   ?? 0),
+      pload: parseFloat(pf.load ?? pf.pload ?? 0),
+      pgrid: parseFloat(pf.grid ?? pf.pgrid ?? 0),
+      pbat:  parseFloat(pf.bettery ?? pf.battery ?? pf.pbat ?? 0),
+      soc:   parseFloat(pf.soc ?? d.soc ?? d.kpi?.soc ?? 0),
+    };
+  }
+
+  // Estructura kpi (la que vemos en los datos brutos)
+  const kpi = d.kpi || {};
+  const inv = d.inverter?.[0] || d.solarList?.[0] || {};
+  const invD = inv.d || inv;
+
+  return {
+    ppv:   parseFloat(kpi.pac   ?? invD.ppv   ?? invD.pac   ?? 0),
+    pload: parseFloat(kpi.load  ?? invD.pload ?? 0),
+    pgrid: parseFloat(invD.pgrid ?? invD.grid  ?? 0),
+    pbat:  parseFloat(invD.pbat  ?? invD.battery ?? 0),
+    soc:   parseFloat(d.soc ?? kpi.soc ?? inv.soc ?? invD.soc ?? d.info?.battery_capacity ?? 0),
+  };
 }
 
 export default function Dashboard() {
@@ -63,44 +93,30 @@ export default function Dashboard() {
       try { result = JSON.parse(raw); }
       catch(e) { throw new Error('Respuesta no JSON: ' + raw.substring(0, 100)); }
 
-      // SEMS devuelve code como string O número — parseInt para comparar
       if (parseInt(result.code) !== 0) {
         throw new Error(`Error ${result.code}: ${result.msg}`);
       }
 
       const d = result.data;
-      setRawDebug(d); // Guardar para diagnóstico
-      console.log('Monitor data keys:', Object.keys(d || {}));
-      console.log('Monitor data:', JSON.stringify(d).substring(0, 800));
+      setRawDebug(d);
 
-      // Extraer flujos de todas las estructuras posibles de SEMS
-      const flow = d?.powerflow || d?.inverter?.[0]?.d || d?.solarList?.[0]?.d || d;
-      const inv  = d?.inverter?.[0] || d?.solarList?.[0] || {};
+      const { ppv, pload, pgrid, pbat, soc } = extractFields(d);
+      console.log('Extracted:', { ppv, pload, pgrid, pbat, soc });
 
-      const ppv   = parseFloat(flow?.ppv   ?? inv?.ppv   ?? d?.ppv   ?? 0);
-      const pload = parseFloat(flow?.pload ?? inv?.pload ?? d?.pload ?? 0);
-      const pgrid = parseFloat(flow?.pgrid ?? inv?.pgrid ?? d?.pgrid ?? 0);
-      const pbat  = parseFloat(flow?.pbat  ?? inv?.pbat  ?? d?.pbat  ?? 0);
-      const soc   = parseFloat(d?.soc ?? inv?.soc ?? flow?.soc ?? 0);
-
-      // Mostrar datos aunque sean 0 (noche, sin sol, etc.)
       setData({ ppv, pload, pgrid, pbat, soc });
 
       const now = Date.now();
       if (lastPollRef.current) {
         const dtH = (now - lastPollRef.current) / 3600000;
-        if (ppv > 0 || pgrid !== 0) {
-          setAccumulated(prev => ({
-            importKwh: prev.importKwh + (pgrid > 0 ? pgrid*dtH/1000 : 0),
-            exportKwh: prev.exportKwh + (pgrid < 0 ? Math.abs(pgrid)*dtH/1000 : 0),
-            selfKwh:   prev.selfKwh   + (Math.max(0, ppv - Math.max(0, -pgrid))*dtH/1000),
-          }));
-        }
+        setAccumulated(prev => ({
+          importKwh: prev.importKwh + (pgrid > 0 ? pgrid*dtH/1000 : 0),
+          exportKwh: prev.exportKwh + (pgrid < 0 ? Math.abs(pgrid)*dtH/1000 : 0),
+          selfKwh:   prev.selfKwh   + (Math.max(0, ppv - Math.max(0, -pgrid))*dtH/1000),
+        }));
       }
       lastPollRef.current = now;
       setLastUpdate(new Date());
     } catch(e) {
-      console.error('Monitor error:', e);
       setMonitorError(e.message);
     }
   }, [token]);
@@ -191,9 +207,11 @@ export default function Dashboard() {
                     </div>
                     <div className="card">
                       <span className="card-icon">🔋</span>
-                      <div className="card-value bat-val">{data.soc}%</div>
+                      <div className="card-value bat-val">
+                        {data.soc > 0 ? `${data.soc}%` : '—'}
+                      </div>
                       <div className="card-label">Batería</div>
-                      <div className="card-sub">{formatW(Math.abs(data.pbat))} · {data.pbat>0?'Cargando':data.pbat<0?'Descargando':'Reposo'}</div>
+                      <div className="card-sub">{data.pbat>0?'Cargando':data.pbat<0?'Descargando':'Reposo'}</div>
                     </div>
                   </div>
                 </section>
@@ -206,7 +224,10 @@ export default function Dashboard() {
                       <div className="balance-row"><span className="balance-label">⚡ Autoconsumo</span><span className="balance-value pos">+{balance.aa.toFixed(4)} €</span></div>
                       <div className="balance-row"><span className="balance-label">🔌 Importación</span><span className="balance-value neg">-{balance.gi.toFixed(4)} €</span></div>
                       <div className="balance-divider" />
-                      <div className="balance-neto"><span>BALANCE NETO</span><span className={balance.neto>=0?'pos':'neg'}>{balance.neto>=0?'+':''}{balance.neto.toFixed(4)} €</span></div>
+                      <div className="balance-neto">
+                        <span>BALANCE NETO</span>
+                        <span className={balance.neto>=0?'pos':'neg'}>{balance.neto>=0?'+':''}{balance.neto.toFixed(4)} €</span>
+                      </div>
                     </div>
                   </section>
                 )}
@@ -220,17 +241,27 @@ export default function Dashboard() {
                   </div>
                 </section>
 
-                {/* Debug colapsado */}
-                {rawDebug && (
-                  <div style={{padding:'16px 16px 0'}}>
-                    <details>
-                      <summary style={{fontSize:9,color:'#333',fontFamily:'Space Mono',cursor:'pointer'}}>Ver datos brutos API</summary>
-                      <pre style={{background:'#0a0a12',border:'1px solid #1a1a2e',borderRadius:8,padding:10,fontSize:9,color:'#444',overflowX:'auto',whiteSpace:'pre-wrap',wordBreak:'break-all',marginTop:6}}>
-                        {JSON.stringify(rawDebug, null, 2)?.substring(0, 3000)}
-                      </pre>
-                    </details>
-                  </div>
+                {/* KPIs del día desde SEMS */}
+                {rawDebug?.kpi && (
+                  <section className="section">
+                    <div className="section-label">KPIs HOY (SEMS)</div>
+                    <div className="balance-card">
+                      <div className="balance-row"><span className="balance-label">⚡ Generación hoy</span><span className="balance-value pos">{rawDebug.kpi.power ?? '—'} kWh</span></div>
+                      <div className="balance-row"><span className="balance-label">💰 Ingresos hoy (SEMS)</span><span className="balance-value pos">{rawDebug.kpi.day_income ?? '—'} €</span></div>
+                      <div className="balance-row"><span className="balance-label">📊 Total acumulado</span><span className="balance-value pos">{rawDebug.kpi.total_power ?? '—'} kWh</span></div>
+                      <div className="balance-row"><span className="balance-label">🏦 Ingresos totales</span><span className="balance-value pos">{rawDebug.kpi.total_income ?? '—'} €</span></div>
+                    </div>
+                  </section>
                 )}
+
+                <div style={{padding:'16px 16px 0'}}>
+                  <details>
+                    <summary style={{fontSize:9,color:'#333',fontFamily:'Space Mono',cursor:'pointer'}}>Ver datos brutos API</summary>
+                    <pre style={{background:'#0a0a12',border:'1px solid #1a1a2e',borderRadius:8,padding:10,fontSize:9,color:'#444',overflowX:'auto',whiteSpace:'pre-wrap',wordBreak:'break-all',marginTop:6}}>
+                      {JSON.stringify(rawDebug, null, 2)?.substring(0, 4000)}
+                    </pre>
+                  </details>
+                </div>
               </>
             )}
           </div>
