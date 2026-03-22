@@ -6,45 +6,105 @@ const TARIFA_PUNTA = 0.1102;
 const TARIFA_VALLE = 0.033;
 const STATION_ID = '8445d981-4fbe-414b-9d12-60bac0b7eeb1';
 const SEMS = 'https://www.semsportal.com/api/v2';
-const getTarifa = () => new Date().getHours() >= 8 ? TARIFA_PUNTA : TARIFA_VALLE;
-
-// Imagen real subida por el usuario
 const RENDER_URL = '/35ED3386-31F6-4CD6-B7B9-D6566ABDC4BC.png';
+const getTarifa = () => new Date().getHours() >= 8 ? TARIFA_PUNTA : TARIFA_VALLE;
 
 function fW(w) {
   if (w == null || isNaN(w)) return '0 W';
   const a = Math.abs(w);
   return a >= 1000 ? `${(a/1000).toFixed(2)} kW` : `${Math.round(a)} W`;
 }
+
 function extractFields(d) {
   if (!d) return { ppv:0, pload:0, pgrid:0, pbat:0, soc:0, batCharging:false, batDischarging:false };
   const pf = d.powerflow;
   if (pf) {
+    // pbat<0 = cargando (bateria recibe), pbat>0 = descargando (bateria da)
     const raw = parseFloat(pf.bettery ?? pf.battery ?? pf.pbat ?? 0);
-    return { ppv:parseFloat(pf.pv??pf.ppv??0), pload:parseFloat(pf.load??pf.pload??0),
-      pgrid:parseFloat(pf.grid??pf.pgrid??0), pbat:raw,
-      batCharging:raw<0, batDischarging:raw>0, soc:parseFloat(pf.soc??d.soc??0) };
+    return {
+      ppv: parseFloat(pf.pv ?? pf.ppv ?? 0),
+      pload: parseFloat(pf.load ?? pf.pload ?? 0),
+      pgrid: parseFloat(pf.grid ?? pf.pgrid ?? 0), // >0 importando, <0 exportando
+      pbat: raw,
+      batCharging: raw < 0,
+      batDischarging: raw > 0,
+      soc: parseFloat(pf.soc ?? d.soc ?? 0)
+    };
   }
-  const kpi=d.kpi||{}; const inv=d.inverter?.[0]||{}; const invD=inv.d||inv;
-  const raw=parseFloat(invD.pbat??0);
-  return { ppv:parseFloat(kpi.pac??invD.ppv??0), pload:parseFloat(kpi.load??invD.pload??0),
-    pgrid:parseFloat(invD.pgrid??0), pbat:raw,
-    batCharging:raw<0, batDischarging:raw>0, soc:parseFloat(d.soc??inv.soc??invD.soc??0) };
+  const kpi = d.kpi || {}; const inv = d.inverter?.[0] || {}; const invD = inv.d || inv;
+  const raw = parseFloat(invD.pbat ?? 0);
+  return {
+    ppv: parseFloat(kpi.pac ?? invD.ppv ?? 0),
+    pload: parseFloat(kpi.load ?? invD.pload ?? 0),
+    pgrid: parseFloat(invD.pgrid ?? 0),
+    pbat: raw,
+    batCharging: raw < 0,
+    batDischarging: raw > 0,
+    soc: parseFloat(d.soc ?? inv.soc ?? invD.soc ?? 0)
+  };
 }
 
-// Chip de dato superpuesto sobre la imagen
-function Chip({ value, sub, color, style }) {
+// Color degradado SOC: verde->amarillo->naranja->rojo
+function socColor(soc) {
+  if (soc >= 50) {
+    // verde (100%) -> amarillo (50%)
+    const t = (soc - 50) / 50;
+    const r = Math.round(255 * (1 - t));
+    const g = Math.round(200 + 55 * t);
+    return `rgb(${r},${g},0)`;
+  } else if (soc >= 25) {
+    // amarillo (50%) -> naranja (25%)
+    const t = (soc - 25) / 25;
+    return `hsl(${30 + t * 30},100%,45%)`;
+  } else {
+    return '#ef4444';
+  }
+}
+
+// Barra de bateria con degradado de color
+function BatteryBar({ soc }) {
+  const color = socColor(soc);
+  const pct = Math.max(0, Math.min(soc, 100));
   return (
-    <div style={{
-      position:'absolute', background:'rgba(255,255,255,0.93)',
-      backdropFilter:'blur(8px)', WebkitBackdropFilter:'blur(8px)',
-      border:`1.5px solid ${color}`, borderRadius:10, padding:'5px 11px',
-      textAlign:'center', minWidth:72,
-      boxShadow:`0 2px 12px rgba(0,0,0,0.15)`, ...style
-    }}>
-      <div style={{fontFamily:"'Space Mono',monospace",fontSize:12,fontWeight:700,color,lineHeight:1.2}}>{value}</div>
-      <div style={{fontFamily:"'Space Mono',monospace",fontSize:8,color:'#777',marginTop:1,lineHeight:1.2}}>{sub}</div>
+    <div style={{width:'100%',height:6,background:'rgba(0,0,0,0.08)',borderRadius:3,overflow:'hidden'}}>
+      <div style={{width:`${pct}%`,height:'100%',borderRadius:3,
+        background:`linear-gradient(90deg, #ef4444 0%, #f97316 25%, #eab308 50%, #22c55e 100%)`,
+        backgroundSize:'400% 100%',backgroundPosition:`${100 - pct}% 0`,
+        transition:'width 0.8s ease'}}/>
     </div>
+  );
+}
+
+// Linea de flujo animada con direccion correcta
+function FlowLine({ x1, y1, x2, y2, active, color, reverse }) {
+  const dur = '1.2s';
+  const da = '8 5';
+  const total = 26;
+  if (!active) return <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="rgba(180,200,180,0.3)" strokeWidth="1.5"/>;
+  return (
+    <line x1={x1} y1={y1} x2={x2} y2={y2}
+      stroke={color} strokeWidth="2.5" strokeDasharray={da}
+      style={{filter:`drop-shadow(0 0 3px ${color})`}}>
+      <animate attributeName="stroke-dashoffset"
+        from={reverse ? `${total}` : '0'}
+        to={reverse ? '0' : `${total}`}
+        dur={dur} repeatCount="indefinite"/>
+    </line>
+  );
+}
+
+function FlowPath({ d, active, color, reverse }) {
+  const dur = '1.2s'; const da = '8 5'; const total = 26;
+  if (!active) return <path d={d} fill="none" stroke="rgba(180,200,180,0.3)" strokeWidth="1.5"/>;
+  return (
+    <path d={d} fill="none"
+      stroke={color} strokeWidth="2.5" strokeDasharray={da}
+      style={{filter:`drop-shadow(0 0 3px ${color})`}}>
+      <animate attributeName="stroke-dashoffset"
+        from={reverse ? `${total}` : '0'}
+        to={reverse ? '0' : `${total}`}
+        dur={dur} repeatCount="indefinite"/>
+    </path>
   );
 }
 
@@ -53,68 +113,103 @@ function GoodWeScene({ ppv, pload, pgrid, pbat, soc, batCharging, batDischarging
   const exporting = pgrid < 0;
   const hasSolar = ppv > 0;
   const hasBat = Math.abs(pbat) > 2;
+  const batColor = batCharging ? '#22c55e' : batDischarging ? '#ef4444' : '#9ca3af';
+  const gridColor = importing ? '#ef4444' : exporting ? '#22c55e' : '#9ca3af';
+  const loadColor = '#6366f1';
+  const socC = socColor(Math.max(0, soc));
 
   return (
-    <div style={{position:'relative', borderRadius:14, overflow:'hidden', background:'#e8f2f8'}}>
-      {/* Imagen real de fondo */}
-      <img
-        src={RENDER_URL}
-        alt="GoodWe Installation"
-        style={{width:'100%', display:'block', userSelect:'none'}}
-        draggable={false}
-      />
+    <div style={{position:'relative', borderRadius:16, overflow:'hidden', background:'#e8f2f8'}}>
+      {/* Imagen real */}
+      <img src={RENDER_URL} alt="GoodWe" style={{width:'100%', display:'block'}} draggable={false}/>
 
-      {/* Flujos animados SVG */}
+      {/* SVG flujos - coordenadas sobre imagen 875x955 (top 73%) -> ~875x697 */}
+      {/* Usamos viewBox proporcional a la imagen */}
       <svg style={{position:'absolute',inset:0,width:'100%',height:'100%',pointerEvents:'none'}}
-        viewBox="0 0 360 310" preserveAspectRatio="none">
-        {hasSolar && (
-          <line x1="175" y1="30" x2="175" y2="115" stroke="#22c55e" strokeWidth="2" strokeDasharray="7 4">
-            <animate attributeName="stroke-dashoffset" from="0" to="22" dur="1s" repeatCount="indefinite"/>
-          </line>
-        )}
-        {pgrid !== 0 && (
-          <line x1="55" y1="155" x2="120" y2="145" stroke={importing?'#ef4444':'#22c55e'} strokeWidth="2" strokeDasharray="7 4">
-            <animate attributeName="stroke-dashoffset" from={importing?"0":"22"} to={importing?"22":"0"} dur="1.2s" repeatCount="indefinite"/>
-          </line>
-        )}
-        {hasBat && (
-          <line x1="175" y1="185" x2="175" y2="240" stroke={batCharging?'#3b82f6':'#a855f7'} strokeWidth="2" strokeDasharray="7 4">
-            <animate attributeName="stroke-dashoffset" from={batCharging?"0":"22"} to={batCharging?"22":"0"} dur="1.2s" repeatCount="indefinite"/>
-          </line>
-        )}
+        viewBox="0 0 875 697" preserveAspectRatio="xMidYMid meet">
+
+        {/* Solar (paneles ~430,130) -> Inversores (~430,370) */}
+        <FlowLine x1={430} y1={130} x2={430} y2={340}
+          active={hasSolar} color="#22c55e" reverse={false}/>
+
+        {/* Red (poste ~90,370) -> Inversores (~280,430) */}
+        <FlowPath d="M 90,370 L 90,450 Q 90,470 110,470 L 270,470"
+          active={pgrid !== 0} color={gridColor}
+          reverse={exporting} />{/* reverse=true cuando exporta: flujo hacia el poste */}
+
+        {/* Inversores (~430,470) -> Bateria (~430,580) */}
+        <FlowLine x1={430} y1={480} x2={430} y2={570}
+          active={hasBat} color={batCharging ? '#22c55e' : '#ef4444'}
+          reverse={batDischarging}/>{/* batdischarging: flujo sube desde bateria */}
+
+        {/* Inversores -> Carga casa (~730,430) */}
+        <FlowPath d="M 590,430 L 730,430 Q 760,430 760,410 L 760,360"
+          active={pload > 0} color={loadColor} reverse={false}/>
       </svg>
 
-      {/* Chip FV - arriba centro sobre los paneles */}
-      <Chip
-        value={fW(ppv)}
-        sub={hasSolar ? 'FV ▸ Generando' : 'FV • Sin sol'}
-        color={hasSolar ? '#16a34a' : '#9ca3af'}
-        style={{top:'5%', left:'50%', transform:'translateX(-50%)'}}
-      />
+      {/* === BADGE FV - circulo arriba centro === */}
+      <div style={{
+        position:'absolute', top:'3%', left:'50%', transform:'translateX(-50%)',
+        background:'white', borderRadius:'50%', width:72, height:72,
+        display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
+        border:`2.5px solid ${hasSolar?'#22c55e':'#e5e7eb'}`,
+        boxShadow:`0 2px 12px rgba(0,0,0,0.12)${hasSolar?`, 0 0 16px rgba(34,197,94,0.25)`:''}`
+      }}>
+        <div style={{fontFamily:"'Space Mono',monospace",fontSize:11,fontWeight:700,
+          color:hasSolar?'#15803d':'#9ca3af',lineHeight:1}}>{fW(ppv)}</div>
+        <div style={{fontFamily:"'Space Mono',monospace",fontSize:7,color:'#9ca3af',marginTop:2}}>FV ›</div>
+      </div>
 
-      {/* Chip RED - izquierda sobre el medidor */}
-      <Chip
-        value={fW(pgrid)}
-        sub={importing ? 'Red ▼ Import' : exporting ? 'Red ▲ Export' : 'Red • Neutro'}
-        color={importing ? '#dc2626' : exporting ? '#16a34a' : '#9ca3af'}
-        style={{top:'40%', left:'2%'}}
-      />
+      {/* === BADGES inferiores: Bateria | Red | Carga === */}
+      <div style={{
+        position:'absolute', bottom:'1%', left:0, right:0,
+        display:'flex', gap:6, padding:'0 8px'
+      }}>
+        {/* BATERIA */}
+        <div style={{
+          flex:1, background:'rgba(255,255,255,0.95)', borderRadius:10,
+          padding:'7px 8px', border:`1.5px solid ${batColor}`,
+          boxShadow:'0 2px 8px rgba(0,0,0,0.1)'
+        }}>
+          <BatteryBar soc={soc}/>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:4}}>
+            <div style={{fontFamily:"'Space Mono',monospace",fontSize:12,fontWeight:700,color:socC}}>
+              {soc > 0 ? `${soc}%` : '—'}
+            </div>
+            <div style={{fontFamily:"'Space Mono',monospace",fontSize:9,fontWeight:700,
+              color:batColor,textAlign:'right'}}>
+              {hasBat ? fW(pbat) : '0 W'}
+            </div>
+          </div>
+          <div style={{fontFamily:"'Space Mono',monospace",fontSize:7,color:'#9ca3af',marginTop:1}}>
+            {batCharging ? '▼ Cargando' : batDischarging ? '▲ Descargando' : 'Batería'}
+          </div>
+        </div>
 
-      {/* Chip BATERÍA - centro inferior */}
-      <Chip
-        value={soc > 0 ? `${soc}%` : '—'}
-        sub={batCharging ? `▼ Cargando ${fW(pbat)}` : batDischarging ? `▲ Descarg. ${fW(pbat)}` : 'Reposo'}
-        color={batCharging ? '#2563eb' : batDischarging ? '#9333ea' : '#9ca3af'}
-        style={{bottom:'4%', left:'50%', transform:'translateX(-50%)'}}
-      />
+        {/* RED */}
+        <div style={{
+          flex:1, background:'rgba(255,255,255,0.95)', borderRadius:10,
+          padding:'7px 8px', border:`1.5px solid ${gridColor}`,
+          boxShadow:'0 2px 8px rgba(0,0,0,0.1)'
+        }}>
+          <div style={{fontFamily:"'Space Mono',monospace",fontSize:14,fontWeight:700,
+            color:gridColor,lineHeight:1}}>{fW(pgrid)}</div>
+          <div style={{fontFamily:"'Space Mono',monospace",fontSize:7,color:'#9ca3af',marginTop:4}}>
+            {importing ? '▼ Red' : exporting ? '▲ Red' : 'Red'}
+          </div>
+        </div>
 
-      {/* Chip CARGA - derecha sobre la ventana */}
-      <Chip
-        value={fW(pload)}
-        sub="Consumo casa"
-        color="#4f46e5"
-        style={{top:'40%', right:'2%'}}
-      />
+        {/* CARGA */}
+        <div style={{
+          flex:1, background:'rgba(255,255,255,0.95)', borderRadius:10,
+          padding:'7px 8px', border:`1.5px solid ${pload>0?loadColor:'#e5e7eb'}`,
+          boxShadow:'0 2px 8px rgba(0,0,0,0.1)'
+        }}>
+          <div style={{fontFamily:"'Space Mono',monospace",fontSize:14,fontWeight:700,
+            color:pload>0?loadColor:'#9ca3af',lineHeight:1}}>{fW(pload)}</div>
+          <div style={{fontFamily:"'Space Mono',monospace",fontSize:7,color:'#9ca3af',marginTop:4}}>Consumo</div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -320,7 +415,7 @@ export default function Dashboard() {
                     <><LineChart points={chartPts} color="#fbbf24"/><div className="xlabs">{xLabels.map((l,i)=><span key={i} className="xl">{l}</span>)}</div></>
                   ):(
                     <div style={{textAlign:'center',padding:'28px 0',color:'#333',fontSize:12}}>
-                      <div style={{fontSize:26,marginBottom:6}}>📊</div><div>Sin datos para este período</div>
+                      <div style={{fontSize:26,marginBottom:6}}>📊</div><div>Sin datos</div>
                       <button className="btnr" onClick={()=>fetchHistory(period,date)} style={{marginTop:10}}>Recargar</button>
                     </div>
                   )}
